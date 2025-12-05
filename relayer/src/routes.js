@@ -659,7 +659,17 @@ app.post('/api/buy-pas', async (req, res) => {
 app.post('/api/purchase-completed', async (req, res) => {
     const { purchaseId, evmTxHash, evmAddress, stellarEventId, amount } = req.body;
     
+    console.log('\n📡 ═══════════════════════════════════════════════════════════════');
+    console.log('   💰 WEBHOOK: Purchase Completed (PAS Sent)');
+    console.log('═══════════════════════════════════════════════════════════════════');
+    console.log(`   📋 EVM TX Hash: ${evmTxHash}`);
+    console.log(`   📋 EVM Address: ${evmAddress}`);
+    console.log(`   📋 Purchase ID: ${purchaseId || 'N/A'}`);
+    console.log(`   📋 Stellar Event ID: ${stellarEventId || 'N/A'}`);
+    console.log(`   📋 Amount: ${amount || 'N/A'}`);
+    
     if (!evmTxHash) {
+        console.log('   ❌ Missing evmTxHash');
         return res.status(400).json({
             success: false,
             error: 'Missing evmTxHash'
@@ -667,51 +677,308 @@ app.post('/api/purchase-completed', async (req, res) => {
     }
     
     try {
-        let query = supabase.from('crypto_purchases');
+        // Find the purchase - try multiple methods
+        let purchase = null;
         
-        // Find the purchase - by ID or by EVM address (most recent locked one)
+        // Method 1: By purchase ID
         if (purchaseId) {
-            query = query.update({
-                evm_tx_hash: evmTxHash,
-                status: 'completed',
-                completed_at: new Date().toISOString()
-            }).eq('id', purchaseId);
-        } else if (evmAddress) {
-            // Find the most recent locked purchase for this EVM address
-            const { data: purchase } = await supabase
+            const { data } = await supabase
                 .from('crypto_purchases')
-                .select('id')
-                .eq('destination_address', evmAddress)
-                .eq('status', 'locked')
+                .select('id, status')
+                .eq('id', purchaseId)
+                .single();
+            purchase = data;
+            console.log(`   🔍 Found by purchaseId: ${purchase ? 'YES' : 'NO'}`);
+        }
+        
+        // Method 2: By EVM address (most recent locked/pending one)
+        if (!purchase && evmAddress) {
+            const normalizedAddress = evmAddress.toLowerCase();
+            console.log(`   🔍 Searching by EVM address: ${normalizedAddress}`);
+            
+            const { data } = await supabase
+                .from('crypto_purchases')
+                .select('id, status, destination_address')
+                .or(`destination_address.eq.${normalizedAddress},destination_address.eq.${evmAddress}`)
+                .in('status', ['locked', 'pending'])
                 .order('created_at', { ascending: false })
                 .limit(1)
                 .single();
-            
+            purchase = data;
+            console.log(`   🔍 Found by evmAddress: ${purchase ? 'YES' : 'NO'}`);
             if (purchase) {
-                query = query.update({
-                    evm_tx_hash: evmTxHash,
-                    status: 'completed',
-                    completed_at: new Date().toISOString()
-                }).eq('id', purchase.id);
-                
-                console.log(`✅ Purchase ${purchase.id} completed for ${evmAddress}. EVM TX: ${evmTxHash}`);
-            } else {
-                console.log(`⚠️  No locked purchase found for EVM address: ${evmAddress}`);
-                return res.json({ success: true, message: 'No matching purchase found' });
+                console.log(`   📋 Matched purchase ID: ${purchase.id}, status: ${purchase.status}`);
             }
-        } else {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing purchaseId or evmAddress'
-            });
         }
         
-        const { error } = await query;
+        if (!purchase) {
+            console.log(`   ⚠️  No matching purchase found`);
+            
+            // List recent purchases for debugging
+            const { data: recentPurchases } = await supabase
+                .from('crypto_purchases')
+                .select('id, destination_address, status, created_at')
+                .order('created_at', { ascending: false })
+                .limit(5);
+            console.log('   📋 Recent purchases:', recentPurchases);
+            
+            return res.json({ success: true, message: 'No matching purchase found' });
+        }
+        
+        // Update the purchase to completed
+        const { error } = await supabase
+            .from('crypto_purchases')
+            .update({
+                evm_tx_hash: evmTxHash,
+                status: 'completed',
+                completed_at: new Date().toISOString()
+            })
+            .eq('id', purchase.id);
+        
         if (error) throw error;
         
-        res.json({ success: true });
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   ✅ Purchase ${purchase.id} marked as COMPLETED`);
+        console.log(`   🔗 EVM TX: ${evmTxHash}`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
+        res.json({ success: true, purchaseId: purchase.id });
         
     } catch (error) {
+        console.error(`   ❌ Error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// PAYBACK: User sends PAS to get INR back
+// Flow: User sends PAS to pool → Relayer detects → INR credited to wallet
+// ============================================
+app.post('/api/payback-pas', async (req, res) => {
+    const { userId, pasAmount, evmAddress, stakeId } = req.body;
+    
+    // Validate inputs
+    if (!userId || !pasAmount || !evmAddress) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields: userId, pasAmount, evmAddress'
+        });
+    }
+    
+    if (pasAmount <= 0) {
+        return res.status(400).json({
+            success: false,
+            error: 'pasAmount must be positive'
+        });
+    }
+    
+    // Validate EVM address
+    if (!ethers.isAddress(evmAddress)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid EVM address'
+        });
+    }
+    
+    const normalizedAddress = userId.toLowerCase();
+    
+    try {
+        console.log('\n📤 ═══════════════════════════════════════════════════════════════');
+        console.log('   💸 PAYBACK PAS REQUEST');
+        console.log('═══════════════════════════════════════════════════════════════════');
+        console.log(`   📋 User: ${userId}`);
+        console.log(`   📋 PAS Amount: ${pasAmount}`);
+        console.log(`   📋 EVM Address: ${evmAddress}`);
+        console.log(`   📋 Stake ID: ${stakeId || 'N/A'}`);
+        
+        // 1. Get current rate
+        const rates = await getPasToInrRate();
+        const inrToReceive = pasAmount * rates.pasToInr;
+        
+        console.log(`   📈 Rate: 1 PAS = ₹${rates.pasToInr.toFixed(2)}`);
+        console.log(`   💰 INR to receive: ₹${inrToReceive.toFixed(2)}`);
+        
+        // 2. Check user's PAS balance on blockchain
+        console.log('\n   🔍 Step 1: Checking PAS balance on blockchain...');
+        const balanceResult = await getPasBalance(evmAddress);
+        
+        if (!balanceResult.success) {
+            throw new Error(`Failed to check PAS balance: ${balanceResult.error}`);
+        }
+        
+        const currentPasBalance = parseFloat(balanceResult.balance);
+        console.log(`   📊 Current PAS Balance: ${currentPasBalance} PAS`);
+        
+        if (currentPasBalance < pasAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Insufficient PAS balance. Have ${currentPasBalance.toFixed(4)} PAS, need ${pasAmount} PAS`
+            });
+        }
+        console.log('   ✅ Sufficient PAS balance');
+        
+        // 3. Return instructions for the user to send PAS to pool
+        // The actual transfer will happen on the frontend via MetaMask
+        const poolAddress = CONFIG.EVM_POOL_ADDRESS;
+        const amountWei = ethers.parseEther(pasAmount.toString()).toString();
+        
+        console.log('\n   📝 Step 2: Generating transaction details...');
+        console.log(`   📋 Pool Address: ${poolAddress}`);
+        console.log(`   📋 Amount (Wei): ${amountWei}`);
+        
+        // 4. If stakeId provided, update the existing stake to pending_payback status
+        // Otherwise just return the transaction details (no new record needed)
+        let paybackId = stakeId;
+        
+        if (stakeId) {
+            const { error: updateError } = await supabase
+                .from('crypto_purchases')
+                .update({
+                    status: 'pending_payback'
+                })
+                .eq('id', stakeId)
+                .eq('user_id', normalizedAddress);
+            
+            if (updateError) {
+                console.error('   ⚠️  Failed to update stake status:', updateError.message);
+            } else {
+                console.log(`   ✅ Stake ${stakeId} marked as pending_payback`);
+            }
+        }
+        
+        console.log('\n   ✅ Ready for user to send PAS to pool');
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
+        res.json({
+            success: true,
+            message: 'Please send PAS to the pool address using MetaMask',
+            data: {
+                paybackId,
+                poolAddress,
+                amountPas: pasAmount,
+                amountWei,
+                inrToReceive: inrToReceive.toFixed(2),
+                exchangeRate: rates.pasToInr,
+                instructions: [
+                    '1. Click "Confirm Payback" to open MetaMask',
+                    '2. Send the specified PAS amount to the pool',
+                    '3. Once confirmed, your INR will be credited automatically'
+                ]
+            }
+        });
+        
+    } catch (error) {
+        console.error(`\n   ❌ Error:`, error.message);
+        console.error('═══════════════════════════════════════════════════════════════════\n');
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ============================================
+// WEBHOOK: Called by relayer when PAS payback is detected
+// Credits INR to user's wallet
+// ============================================
+app.post('/api/payback-completed', async (req, res) => {
+    const { evmTxHash, evmAddress, pasAmount } = req.body;
+    
+    if (!evmTxHash || !evmAddress || !pasAmount) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields: evmTxHash, evmAddress, pasAmount'
+        });
+    }
+    
+    const normalizedAddress = evmAddress.toLowerCase();
+    
+    try {
+        console.log('\n📥 ═══════════════════════════════════════════════════════════════');
+        console.log('   💰 PAYBACK COMPLETED - Crediting INR');
+        console.log('═══════════════════════════════════════════════════════════════════');
+        console.log(`   📋 EVM TX: ${evmTxHash}`);
+        console.log(`   📋 User: ${evmAddress}`);
+        console.log(`   📋 PAS Amount: ${pasAmount}`);
+        
+        // 1. Get current rate and calculate INR
+        const rates = await getPasToInrRate();
+        const inrToCredit = parseFloat(pasAmount) * rates.pasToInr;
+        
+        console.log(`   📈 Rate: 1 PAS = ₹${rates.pasToInr.toFixed(2)}`);
+        console.log(`   💰 INR to credit: ₹${inrToCredit.toFixed(2)}`);
+        
+        // 2. Get current wallet balance
+        const { data: wallet, error: walletError } = await supabase
+            .from('wallets')
+            .select('balance_inr')
+            .eq('wallet_address', normalizedAddress)
+            .single();
+        
+        if (walletError) {
+            console.error('   ❌ Wallet not found:', walletError.message);
+            throw new Error(`Wallet not found: ${walletError.message}`);
+        }
+        
+        const currentBalance = parseFloat(wallet.balance_inr) || 0;
+        const newBalance = currentBalance + inrToCredit;
+        
+        console.log(`   📊 Current Balance: ₹${currentBalance.toFixed(2)}`);
+        console.log(`   📊 New Balance: ₹${newBalance.toFixed(2)}`);
+        
+        // 3. Update wallet balance
+        const { error: updateError } = await supabase
+            .from('wallets')
+            .update({ 
+                balance_inr: newBalance,
+                updated_at: new Date().toISOString()
+            })
+            .eq('wallet_address', normalizedAddress);
+        
+        if (updateError) {
+            throw new Error(`Failed to update wallet: ${updateError.message}`);
+        }
+        
+        console.log('   ✅ Wallet balance updated');
+        
+        // 4. Update payback record if exists
+        const { data: payback } = await supabase
+            .from('crypto_purchases')
+            .select('id')
+            .eq('destination_address', normalizedAddress)
+            .eq('status', 'pending_payback')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+        
+        if (payback) {
+            await supabase
+                .from('crypto_purchases')
+                .update({
+                    evm_tx_hash: evmTxHash,
+                    status: 'paid_back',
+                    completed_at: new Date().toISOString()
+                })
+                .eq('id', payback.id);
+            
+            console.log(`   ✅ Payback record ${payback.id} updated`);
+        }
+        
+        console.log('\n   🎉 PAYBACK SUCCESSFUL!');
+        console.log(`   💰 ₹${inrToCredit.toFixed(2)} credited to wallet`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
+        res.json({
+            success: true,
+            data: {
+                inrCredited: inrToCredit,
+                newBalance,
+                evmTxHash
+            }
+        });
+        
+    } catch (error) {
+        console.error(`   ❌ Error:`, error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });

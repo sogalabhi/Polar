@@ -327,6 +327,159 @@ export async function createStake(walletAddress, amountInr, amountPas, exchangeR
   }
 }
 
+// ============================================
+// PHASE 4: Payback PAS (Get INR back)
+// ============================================
+
+/**
+ * Initiate payback - get transaction details for sending PAS to pool
+ * @param {string} walletAddress - User's EVM wallet address
+ * @param {number} pasAmount - Amount of PAS to pay back
+ * @param {string} stakeId - The ID of the stake being paid back
+ * @returns {Promise<{success: boolean, poolAddress: string, amountWei: string, inrToReceive: number}>}
+ */
+export async function initiatePayback(walletAddress, pasAmount, stakeId) {
+  console.log('\n💰 ═══════════════════════════════════════════════════════════════');
+  console.log('   🔄 PAYBACK: Send PAS to get INR back');
+  console.log('═══════════════════════════════════════════════════════════════════');
+  console.log(`   📋 Wallet: ${walletAddress}`);
+  console.log(`   💎 PAS Amount: ${pasAmount}`);
+  console.log(`   📋 Stake ID: ${stakeId}`);
+  
+  if (!walletAddress || !pasAmount || pasAmount <= 0) {
+    console.error('   ❌ Invalid parameters');
+    console.error('═══════════════════════════════════════════════════════════════════\n');
+    return { success: false, error: 'Invalid parameters' };
+  }
+
+  try {
+    // Call the payback-pas API to get transaction details
+    console.log('\n   🔗 Getting payback details from API...');
+    
+    const response = await fetch('http://localhost:3000/api/payback-pas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: walletAddress.toLowerCase(),
+        pasAmount: pasAmount,
+        evmAddress: walletAddress,
+        stakeId: stakeId
+      })
+    });
+    
+    const apiResult = await response.json();
+    
+    if (apiResult.success) {
+      console.log('\n   ═══════════════════════════════════════════════════════════════');
+      console.log('   ✅ PAYBACK DETAILS RECEIVED');
+      console.log('   ═══════════════════════════════════════════════════════════════');
+      console.log(`   📋 Pool Address: ${apiResult.data.poolAddress}`);
+      console.log(`   💎 PAS Amount: ${apiResult.data.amountPas}`);
+      console.log(`   💰 INR to receive: ₹${apiResult.data.inrToReceive}`);
+      console.log(`   📈 Exchange Rate: ₹${apiResult.data.exchangeRate}/PAS`);
+      console.log('═══════════════════════════════════════════════════════════════════\n');
+      
+      return {
+        success: true,
+        poolAddress: apiResult.data.poolAddress,
+        amountPas: apiResult.data.amountPas,
+        amountWei: apiResult.data.amountWei,
+        inrToReceive: parseFloat(apiResult.data.inrToReceive),
+        exchangeRate: apiResult.data.exchangeRate,
+        paybackId: apiResult.data.paybackId,
+      };
+    } else {
+      console.error('\n   ❌ PAYBACK INITIATION FAILED:', apiResult.error);
+      console.error('═══════════════════════════════════════════════════════════════════\n');
+      return {
+        success: false,
+        error: apiResult.error,
+      };
+    }
+  } catch (error) {
+    console.error('\n   ═══════════════════════════════════════════════════════════════');
+    console.error('   ❌ NETWORK/API ERROR');
+    console.error('   ═══════════════════════════════════════════════════════════════');
+    console.error(`   Error: ${error.message}`);
+    console.error('═══════════════════════════════════════════════════════════════════\n');
+    return {
+      success: false,
+      error: `API connection failed: ${error.message}`,
+    };
+  }
+}
+
+/**
+ * Execute payback - send PAS to pool via MetaMask
+ * @param {string} poolAddress - Pool contract address
+ * @param {string} amountWei - Amount in wei
+ * @returns {Promise<{success: boolean, txHash: string}>}
+ */
+export async function executePayback(poolAddress, amountWei) {
+  console.log('\n📤 ═══════════════════════════════════════════════════════════════');
+  console.log('   🔄 EXECUTING PAYBACK: Sending PAS to Pool');
+  console.log('═══════════════════════════════════════════════════════════════════');
+  console.log(`   📋 Pool Address: ${poolAddress}`);
+  console.log(`   💎 Amount (Wei): ${amountWei}`);
+  
+  if (!window.ethereum) {
+    console.error('   ❌ MetaMask not installed');
+    return { success: false, error: 'MetaMask not installed' };
+  }
+
+  try {
+    // Get current account
+    const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+    if (accounts.length === 0) {
+      return { success: false, error: 'Please connect your wallet first' };
+    }
+    
+    const fromAddress = accounts[0];
+    console.log(`   📋 From: ${fromAddress}`);
+    
+    // Send transaction to pool
+    console.log('\n   📤 Sending transaction via MetaMask...');
+    
+    const txHash = await window.ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [{
+        from: fromAddress,
+        to: poolAddress,
+        value: '0x' + BigInt(amountWei).toString(16), // Convert to hex
+        // No data needed - just sending native PAS to the pool
+      }],
+    });
+    
+    console.log('\n   ═══════════════════════════════════════════════════════════════');
+    console.log('   ✅ TRANSACTION SUBMITTED!');
+    console.log('   ═══════════════════════════════════════════════════════════════');
+    console.log(`   🔗 TX Hash: ${txHash}`);
+    console.log(`   🔗 Explorer: https://blockscout-passet-hub.parity-testnet.parity.io/tx/${txHash}`);
+    console.log('   ⏳ Waiting for confirmation...');
+    console.log('   💡 Your INR will be credited once the relayer detects this transaction');
+    console.log('═══════════════════════════════════════════════════════════════════\n');
+    
+    return {
+      success: true,
+      txHash,
+    };
+    
+  } catch (error) {
+    console.error('\n   ═══════════════════════════════════════════════════════════════');
+    console.error('   ❌ TRANSACTION FAILED');
+    console.error('   ═══════════════════════════════════════════════════════════════');
+    console.error(`   Error: ${error.message}`);
+    if (error.code === 4001) {
+      console.error('   User rejected the transaction');
+    }
+    console.error('═══════════════════════════════════════════════════════════════════\n');
+    return {
+      success: false,
+      error: error.code === 4001 ? 'Transaction rejected by user' : error.message,
+    };
+  }
+}
+
 /**
  * Update stake status and tx hashes
  * @param {string} stakeId - Stake ID
@@ -464,16 +617,29 @@ export async function getStakeHistory(walletAddress) {
 
   try {
     const { data, error } = await supabase
-      .from('stakes')
+      .from('crypto_purchases')
       .select('*')
-      .eq('wallet_address', normalizedAddress)
+      .eq('user_id', normalizedAddress)
       .order('created_at', { ascending: false });
 
     if (error) {
       throw error;
     }
 
-    return { success: true, stakes: data || [] };
+    // Map crypto_purchases fields to stakes format for compatibility
+    const stakes = (data || []).map(p => ({
+      id: p.id,
+      wallet_address: p.user_id,
+      amount_inr: p.from_amount,
+      amount_pas: p.to_amount,
+      exchange_rate: p.exchange_rate,
+      status: p.status,
+      created_at: p.created_at,
+      stellar_tx_hash: p.stellar_tx_hash,
+      evm_tx_hash: p.evm_tx_hash
+    }));
+
+    return { success: true, stakes };
   } catch (error) {
     console.error('❌ Error in getStakeHistory:', error.message);
     return { success: false, error: error.message, stakes: [] };
@@ -490,17 +656,28 @@ export async function getActiveStakes(walletAddress) {
 
   try {
     const { data, error } = await supabase
-      .from('stakes')
+      .from('crypto_purchases')
       .select('*')
-      .eq('wallet_address', normalizedAddress)
-      .in('status', ['pending', 'completed'])
+      .eq('user_id', normalizedAddress)
+      .in('status', ['pending', 'locked', 'completed'])
       .order('created_at', { ascending: false });
 
     if (error) {
       throw error;
     }
 
-    return { success: true, stakes: data || [] };
+    // Map crypto_purchases fields to stakes format for compatibility
+    const stakes = (data || []).map(p => ({
+      id: p.id,
+      wallet_address: p.user_id,
+      amount_inr: p.from_amount,
+      amount_pas: p.to_amount,
+      exchange_rate: p.exchange_rate,
+      status: p.status,
+      created_at: p.created_at
+    }));
+
+    return { success: true, stakes };
   } catch (error) {
     console.error('❌ Error in getActiveStakes:', error.message);
     return { success: false, error: error.message, stakes: [] };
@@ -517,17 +694,17 @@ export async function getTotalStaked(walletAddress) {
 
   try {
     const { data, error } = await supabase
-      .from('stakes')
-      .select('amount_inr, amount_pas')
-      .eq('wallet_address', normalizedAddress)
-      .in('status', ['pending', 'completed']);
+      .from('crypto_purchases')
+      .select('from_amount, to_amount')
+      .eq('user_id', normalizedAddress)
+      .in('status', ['pending', 'locked', 'completed']);
 
     if (error) {
       throw error;
     }
 
-    const totalInr = data.reduce((sum, s) => sum + parseFloat(s.amount_inr), 0);
-    const totalPas = data.reduce((sum, s) => sum + parseFloat(s.amount_pas), 0);
+    const totalInr = data.reduce((sum, s) => sum + parseFloat(s.from_amount || 0), 0);
+    const totalPas = data.reduce((sum, s) => sum + parseFloat(s.to_amount || 0), 0);
 
     return {
       success: true,

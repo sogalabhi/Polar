@@ -5,13 +5,14 @@ import InteractiveBackground from '../components/InteractiveBackground';
 import StatCard from '../components/StatCard';
 import NotificationModal from '../components/NotificationModal';
 import { useWallet } from '../hooks/useWallet';
-import { addFunds, createStake } from '../lib/supabase';
+import { addFunds, createStake, initiatePayback, executePayback } from '../lib/supabase';
 
 const Dashboard = () => {
   const { Razorpay } = useRazorpay();
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [stakeAmount, setStakeAmount] = useState('');
   const [isStaking, setIsStaking] = useState(false);
+  const [payingBackStakeId, setPayingBackStakeId] = useState(null);
   
   // Get wallet data from Supabase via useWallet hook
   const { 
@@ -197,6 +198,95 @@ const Dashboard = () => {
   const formatAddress = (addr) => {
     if (!addr) return '';
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
+
+  // Handle payback PAS to get INR for a specific stake
+  const handlePayback = async (stake) => {
+    if (!isConnected) {
+      alert('Please connect your wallet first!');
+      return;
+    }
+
+    const amountPas = parseFloat(stake.amount_pas);
+    if (!amountPas || amountPas <= 0) {
+      alert('Invalid stake amount');
+      return;
+    }
+
+    if (amountPas > parseFloat(realPasBalance)) {
+      alert(`Insufficient PAS balance. You have ${parseFloat(realPasBalance).toFixed(4)} PAS but need ${amountPas.toFixed(4)} PAS`);
+      return;
+    }
+
+    const currentInrValue = amountPas * pasInrRate;
+
+    console.log('\n🔄 ═══════════════════════════════════════════════════════════════════');
+    console.log('   USER ACTION: Sell PAS from Stake');
+    console.log('═══════════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Stake ID: ${stake.id}`);
+    console.log(`   📋 Wallet Address: ${address}`);
+    console.log(`   💰 Amount PAS: ${amountPas}`);
+    console.log(`   📈 Original Rate: 1 PAS = ₹${stake.exchange_rate}`);
+    console.log(`   📈 Current Rate: 1 PAS = ₹${pasInrRate}`);
+    console.log(`   💵 INR at current rate: ₹${currentInrValue.toFixed(2)}`);
+    console.log('═══════════════════════════════════════════════════════════════════════\n');
+
+    setPayingBackStakeId(stake.id);
+    try {
+      // Step 1: Initiate payback to get pool address (pass stake.id to update existing record)
+      console.log('   🔄 Step 1: Initiating payback...');
+      const initResult = await initiatePayback(address, amountPas, stake.id);
+      
+      if (!initResult.success) {
+        throw new Error(initResult.error || 'Failed to initiate payback');
+      }
+
+      console.log(`   ✅ Pool Address: ${initResult.poolAddress}`);
+      console.log(`   💵 INR to receive: ₹${initResult.inrToReceive}`);
+      console.log(`   💰 Amount Wei: ${initResult.amountWei}`);
+
+      // Step 2: Execute the PAS transfer via MetaMask
+      console.log('\n   🔄 Step 2: Sending PAS to pool via MetaMask...');
+      const execResult = await executePayback(initResult.poolAddress, initResult.amountWei);
+
+      if (execResult.success) {
+        console.log('\n   ═══════════════════════════════════════════════════════════════');
+        console.log('   ✅ PAYBACK SUCCESSFUL!');
+        console.log('   ═══════════════════════════════════════════════════════════════');
+        console.log(`   🔗 Transaction Hash: ${execResult.txHash}`);
+        console.log(`   🔗 Explorer: https://blockscout-asset-hub-paseo.parity-chains-scoutplorer.io/tx/${execResult.txHash}`);
+        console.log(`   💵 INR Credited: ₹${initResult.inrToReceive}`);
+        console.log('   ⏳ INR will be credited once relayer confirms the transaction');
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+
+        setNotifications(prev => [{
+          title: 'Sell Order Submitted!',
+          message: `Sent ${amountPas.toFixed(4)} PAS. ₹${initResult.inrToReceive} will be credited after confirmation.`,
+          time: 'Just now',
+          type: 'success'
+        }, ...prev]);
+        
+        // Refresh after a short delay to show updated balances
+        setTimeout(() => refresh(), 3000);
+      } else {
+        throw new Error(execResult.error || 'Transaction failed');
+      }
+    } catch (error) {
+      console.error('\n   ═══════════════════════════════════════════════════════════════');
+      console.error('   ❌ PAYBACK ERROR');
+      console.error('   ═══════════════════════════════════════════════════════════════');
+      console.error(`   Error: ${error.message}`);
+      console.error('═══════════════════════════════════════════════════════════════════\n');
+      
+      setNotifications(prev => [{
+        title: 'Sell Failed',
+        message: error.message,
+        time: 'Just now',
+        type: 'error'
+      }, ...prev]);
+    } finally {
+      setPayingBackStakeId(null);
+    }
   };
 
   return (
@@ -391,28 +481,56 @@ const Dashboard = () => {
                     <th className="pb-4 text-gray-400 font-medium">Amount INR</th>
                     <th className="pb-4 text-gray-400 font-medium">PAS Tokens</th>
                     <th className="pb-4 text-gray-400 font-medium">Rate</th>
+                    <th className="pb-4 text-gray-400 font-medium">Current Value</th>
                     <th className="pb-4 text-gray-400 font-medium">Status</th>
                     <th className="pb-4 text-gray-400 font-medium">Date</th>
+                    <th className="pb-4 text-gray-400 font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {stakes.map((stake) => (
-                    <tr key={stake.id} className="border-b border-white/5 hover:bg-white/5">
-                      <td className="py-4">₹{parseFloat(stake.amount_inr).toLocaleString()}</td>
-                      <td className="py-4 text-purple-400">{parseFloat(stake.amount_pas).toFixed(4)} PAS</td>
-                      <td className="py-4 text-gray-400">₹{stake.exchange_rate}</td>
-                      <td className="py-4">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          stake.status === 'completed' ? 'bg-green-500/20 text-green-400' :
-                          stake.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
-                          'bg-gray-500/20 text-gray-400'
-                        }`}>
-                          {stake.status}
-                        </span>
-                      </td>
-                      <td className="py-4 text-gray-400">{new Date(stake.created_at).toLocaleDateString()}</td>
-                    </tr>
-                  ))}
+                  {stakes.map((stake) => {
+                    const currentValue = parseFloat(stake.amount_pas) * pasInrRate;
+                    const originalValue = parseFloat(stake.amount_inr);
+                    const pnl = currentValue - originalValue;
+                    const pnlPercent = ((pnl / originalValue) * 100).toFixed(1);
+                    
+                    return (
+                      <tr key={stake.id} className="border-b border-white/5 hover:bg-white/5">
+                        <td className="py-4">₹{parseFloat(stake.amount_inr).toLocaleString()}</td>
+                        <td className="py-4 text-purple-400">{parseFloat(stake.amount_pas).toFixed(4)} PAS</td>
+                        <td className="py-4 text-gray-400">₹{stake.exchange_rate}</td>
+                        <td className="py-4">
+                          <span className="text-white">₹{currentValue.toFixed(2)}</span>
+                          <span className={`ml-2 text-xs ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {pnl >= 0 ? '+' : ''}{pnlPercent}%
+                          </span>
+                        </td>
+                        <td className="py-4">
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            stake.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                            stake.status === 'locked' ? 'bg-blue-500/20 text-blue-400' :
+                            stake.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
+                            'bg-gray-500/20 text-gray-400'
+                          }`}>
+                            {stake.status}
+                          </span>
+                        </td>
+                        <td className="py-4 text-gray-400">{new Date(stake.created_at).toLocaleDateString()}</td>
+                        <td className="py-4">
+                          {(stake.status === 'completed' || stake.status === 'locked') && (
+                            <button
+                              onClick={() => handlePayback(stake)}
+                              disabled={payingBackStakeId === stake.id || parseFloat(stake.amount_pas) > parseFloat(realPasBalance)}
+                              className="px-4 py-2 bg-orange-500 text-white text-sm font-bold rounded-lg hover:bg-orange-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={parseFloat(stake.amount_pas) > parseFloat(realPasBalance) ? `Insufficient PAS balance (need ${parseFloat(stake.amount_pas).toFixed(4)} PAS)` : `Sell for ₹${currentValue.toFixed(2)}`}
+                            >
+                              {payingBackStakeId === stake.id ? 'Selling...' : `Sell for ₹${currentValue.toFixed(0)}`}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

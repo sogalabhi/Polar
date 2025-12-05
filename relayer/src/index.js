@@ -42,7 +42,7 @@ const CONFIG = {
     POLKADOT_RELAYER_SEED: process.env.POLKADOT_RELAYER_SEED || '',
     
     // API Server URL (for notifying when PAS is sent)
-    API_SERVER_URL: process.env.API_SERVER_URL || 'http://localhost:3001',
+    API_SERVER_URL: process.env.API_SERVER_URL || 'http://localhost:3000',
     
     // LTV ratio for calculating loan amount (100% = 1.0, 1:1 PAS to XLM)
     LTV_RATIO: 1.0,
@@ -328,6 +328,36 @@ async function watchEvmEvents(evm, onEvmDeposit, processedData) {
                 console.log(`   Stellar Destination: ${stellarAddress || 'NOT PROVIDED'}`);
                 console.log(`   Loan Amount (${CONFIG.LTV_RATIO * 100}% LTV): ${xlmLoanAmount} XLM`);
                 
+                // Mark as processed IMMEDIATELY to prevent duplicates
+                processedData.processedEvmTxIds.push(txHash);
+                if (processedData.processedEvmTxIds.length > 1000) {
+                    processedData.processedEvmTxIds = processedData.processedEvmTxIds.slice(-1000);
+                }
+                saveProcessedEvents(processedData);
+                
+                // Notify API server about the payback (credit INR to user)
+                try {
+                    console.log('   📡 Notifying API server to credit INR...');
+                    const response = await fetch(`${CONFIG.API_SERVER_URL}/api/payback-completed`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            evmTxHash: txHash,
+                            evmAddress: from,
+                            pasAmount: devAmount.toString()
+                        })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        console.log(`   ✅ INR credited: ₹${result.data?.inrCredited?.toFixed(2)}`);
+                    } else {
+                        console.log(`   ⚠️  API response: ${result.error}`);
+                    }
+                } catch (apiError) {
+                    console.log(`   ⚠️  Could not notify API server: ${apiError.message}`);
+                }
+                
+                // If Stellar address provided, also release XLM on Stellar
                 if (stellarAddress) {
                     await onEvmDeposit({
                         txHash,
@@ -340,12 +370,6 @@ async function watchEvmEvents(evm, onEvmDeposit, processedData) {
                     });
                 }
                 
-                // Mark as processed
-                processedData.processedEvmTxIds.push(txHash);
-                if (processedData.processedEvmTxIds.length > 1000) {
-                    processedData.processedEvmTxIds = processedData.processedEvmTxIds.slice(-1000);
-                }
-                
                 console.log('============================================\n');
             }
             
@@ -356,8 +380,10 @@ async function watchEvmEvents(evm, onEvmDeposit, processedData) {
             }
             
         } catch (e) {
-            // Silently ignore polling errors
-            if (!e.message?.includes('Filter')) {
+            // Silently ignore common RPC polling errors (Paseo RPC is flaky)
+            const ignoredErrors = ['filter', 'Filter', 'coalesce', 'getLogs', 'UNKNOWN_ERROR'];
+            const shouldIgnore = ignoredErrors.some(err => e.message?.includes(err));
+            if (!shouldIgnore) {
                 console.error('EVM polling error:', e.message);
             }
         }
