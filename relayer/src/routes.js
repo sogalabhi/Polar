@@ -1277,7 +1277,16 @@ app.post('/api/borrow-pas', async (req, res) => {
         }
         
         const currentBalance = parseFloat(wallet.balance_inr) || 0;
-        console.log(`\n   💳 User Balance: ₹${currentBalance.toFixed(2)}`);
+        
+        // Get initial PAS balance from blockchain
+        const initialPasBalance = await getPasBalance(evmAddress);
+        
+        console.log(`\n   ═══════════════════════════════════════════════════════════`);
+        console.log(`   💳 INITIAL WALLET BALANCES (BEFORE LOAN)`);
+        console.log(`   ═══════════════════════════════════════════════════════════`);
+        console.log(`   💵 INR Balance: ₹${currentBalance.toFixed(2)}`);
+        console.log(`   🟣 PAS Balance: ${initialPasBalance.balance} PAS`);
+        console.log(`   ═══════════════════════════════════════════════════════════`);
         
         if (currentBalance < collateralInr) {
             return res.status(400).json({
@@ -1369,13 +1378,16 @@ app.post('/api/borrow-pas', async (req, res) => {
             
             // Update loan record with EVM TX hash
             await supabase
-                .from('crypto_purchases')
-                .update({ evm_tx_hash: evmTxHash })
+                .from('lending_loans')
+                .update({ evm_release_tx_hash: evmTxHash })
                 .eq('id', loan.id);
         } else {
             console.error(`   ⚠️  Failed to send PAS: ${pasResult.error}`);
             console.error(`   ℹ️  Loan created but PAS not sent. User can retry or contact support.`);
         }
+        
+        // Get final PAS balance
+        const finalPasBalance = await getPasBalance(evmAddress);
         
         console.log('\n   ═══════════════════════════════════════════════════════════');
         console.log('   🎉 LOAN CREATED SUCCESSFULLY!');
@@ -1388,6 +1400,11 @@ app.post('/api/borrow-pas', async (req, res) => {
         if (evmTxHash) {
             console.log(`   🔗 PAS TX: ${evmTxHash}`);
         }
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   💳 FINAL WALLET BALANCES (AFTER LOAN)');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   💵 INR Balance: ₹${newBalance.toFixed(2)} (was ₹${currentBalance.toFixed(2)})`);
+        console.log(`   🟣 PAS Balance: ${finalPasBalance.balance} PAS (was ${initialPasBalance.balance} PAS)`);
         console.log('═══════════════════════════════════════════════════════════════════\n');
         
         // 9. Return loan details
@@ -1835,6 +1852,22 @@ app.post('/api/lending/repay', async (req, res) => {
             });
         }
         
+        // Get initial balances
+        const { data: initialWallet } = await supabase
+            .from('wallets')
+            .select('balance_inr')
+            .eq('wallet_address', normalizedAddress)
+            .single();
+        const initialInrBalance = parseFloat(initialWallet?.balance_inr) || 0;
+        const initialPasBalanceResult = await getPasBalance(userId);
+        
+        console.log(`\n   ═══════════════════════════════════════════════════════════`);
+        console.log(`   💳 INITIAL WALLET BALANCES (BEFORE REPAYMENT)`);
+        console.log(`   ═══════════════════════════════════════════════════════════`);
+        console.log(`   💵 INR Balance: ₹${initialInrBalance.toFixed(2)}`);
+        console.log(`   🟣 PAS Balance: ${initialPasBalanceResult.balance} PAS`);
+        console.log(`   ═══════════════════════════════════════════════════════════`);
+        
         // 2. Calculate total debt in PAS
         const xlmPrice = await getXlmPrice();
         const pasRates = await getPasToInrRate();
@@ -1958,11 +1991,25 @@ app.post('/api/lending/repay', async (req, res) => {
             }
         }
         
+        // Get final balances
+        const { data: finalWalletData } = await supabase
+            .from('wallets')
+            .select('balance_inr')
+            .eq('wallet_address', normalizedAddress)
+            .single();
+        const finalInrBalance = parseFloat(finalWalletData?.balance_inr) || 0;
+        const finalPasBalanceResult = await getPasBalance(userId);
+        
         console.log('\n═══════════════════════════════════════════════════════════════════');
         console.log('   ✅ LOAN REPAID SUCCESSFULLY!');
         console.log('═══════════════════════════════════════════════════════════════════');
         console.log(`   🔓 Collateral Released: ${collateralXlm.toFixed(4)} XLM (₹${collateralValueToReturn.toFixed(2)})`);
         console.log(`   💰 Total Paid: ${totalDebtPas.toFixed(4)} PAS (₹${totalDebtInr.toFixed(2)})`);
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   💳 FINAL WALLET BALANCES (AFTER REPAYMENT)');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   💵 INR Balance: ₹${finalInrBalance.toFixed(2)} (was ₹${initialInrBalance.toFixed(2)})`);
+        console.log(`   🟣 PAS Balance: ${finalPasBalanceResult.balance} PAS (was ${initialPasBalanceResult.balance} PAS)`);
         console.log('═══════════════════════════════════════════════════════════════════\n');
         
         res.json({

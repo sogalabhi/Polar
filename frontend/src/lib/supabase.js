@@ -610,7 +610,7 @@ export async function payBackStake(stakeId, walletAddress) {
 // ============================================
 
 /**
- * Get all stakes for a user
+ * Get all loans for a user (from lending_loans table)
  * @param {string} walletAddress - User's wallet address
  * @returns {Promise<{success: boolean, stakes: array}>}
  */
@@ -619,7 +619,7 @@ export async function getStakeHistory(walletAddress) {
 
   try {
     const { data, error } = await supabase
-      .from('crypto_purchases')
+      .from('lending_loans')
       .select('*')
       .eq('user_id', normalizedAddress)
       .order('created_at', { ascending: false });
@@ -628,17 +628,30 @@ export async function getStakeHistory(walletAddress) {
       throw error;
     }
 
-    // Map crypto_purchases fields to stakes format for compatibility
+    // Map lending_loans fields to stakes format for compatibility with existing UI
     const stakes = (data || []).map(p => ({
       id: p.id,
       wallet_address: p.user_id,
-      amount_inr: p.from_amount,
-      amount_pas: p.to_amount,
-      exchange_rate: p.exchange_rate,
+      amount_inr: p.collateral_value_inr || p.borrowed_value_inr,
+      amount_pas: p.borrowed_pas,
+      exchange_rate: p.borrowed_value_inr && p.borrowed_pas ? (p.borrowed_value_inr / p.borrowed_pas).toFixed(2) : 0,
       status: p.status,
       created_at: p.created_at,
-      stellar_tx_hash: p.stellar_tx_hash,
-      evm_tx_hash: p.evm_tx_hash
+      stellar_tx_hash: p.stellar_lock_tx_hash,
+      evm_tx_hash: p.evm_release_tx_hash,
+      // Additional lending fields
+      collateral_xlm: p.collateral_xlm,
+      collateral_value_inr: p.collateral_value_inr,
+      borrowed_pas: p.borrowed_pas,
+      borrowed_value_inr: p.borrowed_value_inr,
+      ltv_ratio: p.ltv_ratio,
+      interest_rate_apy: p.interest_rate_apy,
+      loan_type: p.loan_type,
+      loan_duration_days: p.loan_duration_days,
+      health_factor: p.health_factor,
+      liquidation_price: p.liquidation_price,
+      repayment_deadline: p.repayment_deadline,
+      is_lending_loan: true
     }));
 
     return { success: true, stakes };
@@ -649,7 +662,7 @@ export async function getStakeHistory(walletAddress) {
 }
 
 /**
- * Get active stakes (pending or completed, not paid_back)
+ * Get active loans (active or overdue, not repaid/liquidated)
  * @param {string} walletAddress - User's wallet address
  * @returns {Promise<{success: boolean, stakes: array}>}
  */
@@ -658,25 +671,34 @@ export async function getActiveStakes(walletAddress) {
 
   try {
     const { data, error } = await supabase
-      .from('crypto_purchases')
+      .from('lending_loans')
       .select('*')
       .eq('user_id', normalizedAddress)
-      .in('status', ['pending', 'locked', 'completed'])
+      .in('status', ['active', 'overdue'])
       .order('created_at', { ascending: false });
 
     if (error) {
       throw error;
     }
 
-    // Map crypto_purchases fields to stakes format for compatibility
+    // Map lending_loans fields to stakes format for compatibility
     const stakes = (data || []).map(p => ({
       id: p.id,
       wallet_address: p.user_id,
-      amount_inr: p.from_amount,
-      amount_pas: p.to_amount,
-      exchange_rate: p.exchange_rate,
+      amount_inr: p.collateral_value_inr || p.borrowed_value_inr,
+      amount_pas: p.borrowed_pas,
+      exchange_rate: p.borrowed_value_inr && p.borrowed_pas ? (p.borrowed_value_inr / p.borrowed_pas).toFixed(2) : 0,
       status: p.status,
-      created_at: p.created_at
+      created_at: p.created_at,
+      // Additional lending fields
+      collateral_xlm: p.collateral_xlm,
+      collateral_value_inr: p.collateral_value_inr,
+      borrowed_pas: p.borrowed_pas,
+      borrowed_value_inr: p.borrowed_value_inr,
+      ltv_ratio: p.ltv_ratio,
+      health_factor: p.health_factor,
+      repayment_deadline: p.repayment_deadline,
+      is_lending_loan: true
     }));
 
     return { success: true, stakes };
@@ -687,7 +709,7 @@ export async function getActiveStakes(walletAddress) {
 }
 
 /**
- * Get total amount currently staked
+ * Get total amount currently in active loans
  * @param {string} walletAddress - User's wallet address
  * @returns {Promise<{success: boolean, totalInr: number, totalPas: number}>}
  */
@@ -696,17 +718,17 @@ export async function getTotalStaked(walletAddress) {
 
   try {
     const { data, error } = await supabase
-      .from('crypto_purchases')
-      .select('from_amount, to_amount')
+      .from('lending_loans')
+      .select('collateral_value_inr, borrowed_pas')
       .eq('user_id', normalizedAddress)
-      .in('status', ['pending', 'locked', 'completed']);
+      .in('status', ['active', 'overdue']);
 
     if (error) {
       throw error;
     }
 
-    const totalInr = data.reduce((sum, s) => sum + parseFloat(s.from_amount || 0), 0);
-    const totalPas = data.reduce((sum, s) => sum + parseFloat(s.to_amount || 0), 0);
+    const totalInr = data.reduce((sum, s) => sum + parseFloat(s.collateral_value_inr || 0), 0);
+    const totalPas = data.reduce((sum, s) => sum + parseFloat(s.borrowed_pas || 0), 0);
 
     return {
       success: true,

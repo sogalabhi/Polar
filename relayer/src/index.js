@@ -219,11 +219,12 @@ async function watchStellarEvents(onLockEvent, processedData) {
                         console.log(`   Locked Amount: ${amount} stroops`);
                         
                         // Calculate loan amount (amount * LTV)
-                        // Convert stroops to PAS (1 XLM = 1 PAS for simplicity)
+                        // Convert stroops to XLM (this is used for non-lending 1:1 swap events)
                         const xlmAmount = Number(amount) / 10000000; // stroops to XLM
                         const loanAmountDev = xlmAmount * CONFIG.LTV_RATIO;
                         
-                        console.log(`   Loan Amount (${CONFIG.LTV_RATIO * 100}% LTV): ${loanAmountDev} PAS`);
+                        console.log(`   Locked XLM: ${xlmAmount.toFixed(4)} XLM`);
+                        console.log(`   Release Amount (${CONFIG.LTV_RATIO * 100}% LTV): ${loanAmountDev.toFixed(4)} (native token)`);
                         
                         // Mark as processed IMMEDIATELY to prevent duplicate processing
                         processedData.processedStellarTxIds.push(event.id);
@@ -434,13 +435,13 @@ async function releaseOnEvm(evm, eventData) {
     console.log(`   📋 Method: releaseLiquidity()`);
     console.log(`   📋 Network: Paseo Asset Hub (Chain ID: ${CONFIG.EVM_CHAIN_ID})`);
     console.log(`   📋 Recipient: ${eventData.evmAddress}`);
-    console.log(`   📋 Amount: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+    console.log(`   📋 Amount: ${ethers.formatEther(eventData.loanAmountWei)} (native token)`);
     console.log(`   📋 Event ID: ${eventData.eventId}`);
     
     if (!evm) {
         console.log('\n   ⚠️  EVM not configured. Would release:');
         console.log(`   To: ${eventData.evmAddress}`);
-        console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+        console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} (native token)`);
         console.log('═══════════════════════════════════════════════════════════════════\n');
         return;
     }
@@ -452,15 +453,16 @@ async function releaseOnEvm(evm, eventData) {
         // Check pool balance first
         console.log('\n   🔍 Step 1: Checking pool balance...');
         const poolBalance = await poolContract.getBalance();
-        console.log(`   📊 Pool Balance: ${ethers.formatEther(poolBalance)} PAS`);
-        console.log(`   📊 Required: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+        console.log(`   📊 Pool Balance: ${ethers.formatEther(poolBalance)} (native token)`);
+        console.log(`   📊 Required: ${ethers.formatEther(eventData.loanAmountWei)} (native token)`);
         
         if (poolBalance < eventData.loanAmountWei) {
             console.error('\n   ═══════════════════════════════════════════════════════════');
             console.error('   ❌ INSUFFICIENT POOL BALANCE');
             console.error('   ═══════════════════════════════════════════════════════════');
-            console.error(`   Available: ${ethers.formatEther(poolBalance)} PAS`);
-            console.error(`   Required: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+            console.error(`   Available: ${ethers.formatEther(poolBalance)} (native token)`);
+            console.error(`   Required: ${ethers.formatEther(eventData.loanAmountWei)} (native token)`);
+            console.error(`   Note: This is for non-lending lock events (1:1 XLM swap).`);
             console.error('═══════════════════════════════════════════════════════════════════\n');
             return;
         }
