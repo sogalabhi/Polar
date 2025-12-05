@@ -1,0 +1,17 @@
+[package]
+name = "ink_pool"
+version = "0.1.0"
+authors = ["Polar Team"]
+edition = "2021"
+
+[dependencies]
+ink = { version = "4.3.0", default-features = false }
+
+[lib]
+path = "lib.rs"
+
+[features]
+default = ["std"]
+std = [
+    "ink/std",
+]
