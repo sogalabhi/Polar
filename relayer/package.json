@@ -13,7 +13,11 @@
     "@polkadot/api": "^16.5.3",
     "@stellar/stellar-sdk": "^14.4.1",
     "@types/node": "^24.10.1",
+    "body-parser": "^2.2.1",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "razorpay": "^2.9.6",
     "stellar-sdk": "^13.3.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"

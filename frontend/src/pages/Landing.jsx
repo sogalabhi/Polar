@@ -1,9 +1,11 @@
-import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import BridgeAnimation from '../components/BridgeAnimation';
 import InteractiveBackground from '../components/InteractiveBackground';
 
 const Landing = () => {
+  const navigate = useNavigate();
+
   return (
     <div className="min-h-screen bg-black text-white selection:bg-green-500 selection:text-black overflow-hidden relative font-mono">
       
@@ -53,7 +55,10 @@ hover:shadow-[0_0_15px_rgba(0,255,140,0.5)]
             transition={{ delay: 0.2, duration: 0.5 }}
             className="flex flex-col sm:flex-row gap-4 justify-center items-center"
           >
-            <button className="px-4 py-2 bg-black text-white text-lg font-medium rounded-lg cursor-pointer transform hover:scale-105 transition-all shadow-[0_0_25px_4px_rgba(16,255,140,0.3)]">
+            <button 
+              onClick={() => navigate('/dashboard')}
+              className="px-4 py-2 bg-black text-white text-lg font-medium rounded-lg cursor-pointer transform hover:scale-105 transition-all shadow-[0_0_25px_4px_rgba(16,255,140,0.3)]"
+            >
               Launch App
             </button>
 
