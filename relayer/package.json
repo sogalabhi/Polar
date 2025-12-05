@@ -1,14 +1,24 @@
 {
-  "name": "relayer",
+  "name": "polar-bridge-relayer",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "src/index.js",
   "scripts": {
+    "start": "node src/index.js",
+    "server": "node src/server.js",
+    "dev": "node --watch src/index.js",
+    "dev:server": "node --watch src/server.js",
+    "test:balance": "node test/test-check-balance.js",
+    "test:evm-pool": "node test/test-check-evm-pool.js",
+    "test:watch": "node test/test-watch-events.js",
+    "test:lock": "node test/test-lock-xlm.js",
+    "test:unlock": "node test/test-unlock-xlm.js",
+    "test:release": "node test/test-release-pas.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": ["bridge", "stellar", "moonbeam", "polkadot"],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Polar Bridge Relayer - Stellar <-> Moonbase Alpha",
   "dependencies": {
     "@polkadot/api": "^16.5.3",
     "@stellar/stellar-sdk": "^14.4.1",
@@ -20,6 +30,8 @@
     "razorpay": "^2.9.6",
     "stellar-sdk": "^13.3.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@supabase/supabase-js": "^2.45.0",
+    "ethers": "^6.13.4"
   }
 }
