@@ -1,7 +1,7 @@
 /**
  * TEST: Check EVM Pool Balance
  * 
- * This script checks the DEV balance in the EVM pool contract.
+ * This script checks the PAS balance in the EVM pool contract.
  * 
  * Usage: node test/test-check-evm-pool.js
  */

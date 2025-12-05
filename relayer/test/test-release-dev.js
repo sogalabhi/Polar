@@ -1,7 +1,7 @@
 /**
- * TEST: Release DEV on EVM (Moonbase Alpha)
+ * TEST: Release PAS on EVM (Paseo Asset Hub)
  * 
- * This script manually releases DEV from the EVM pool to a specified address.
+ * This script manually releases PAS from the EVM pool to a specified address.
  * Useful for testing the EVM side without relying on Stellar events.
  * 
  * Usage: node test/test-release-dev.js <amount_dev> <to_address>
@@ -13,8 +13,8 @@ const { ethers } = require('ethers');
 
 // Configuration
 const CONFIG = {
-    MOONBASE_RPC_URL: process.env.MOONBASE_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
-    EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6',
+    PASEO_RPC_URL: process.env.PASEO_RPC_URL || 'https://testnet-passet-hub-eth-rpc.polkadot.io',
+    EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x49e12e876588052A977dB816107B1772B4103E3e',
     EVM_PRIVATE_KEY: process.env.EVM_RELAYER_PRIVATE_KEY,
 };
 
@@ -27,7 +27,7 @@ const POOL_ABI = [
 
 async function releaseDev(amount, toAddress) {
     console.log('\n💸 ═══════════════════════════════════════════');
-    console.log('   TEST: Release DEV on Moonbase Alpha');
+    console.log('   TEST: Release PAS on Paseo Asset Hub');
     console.log('═══════════════════════════════════════════════\n');
     
     if (!CONFIG.EVM_PRIVATE_KEY) {
@@ -40,14 +40,14 @@ async function releaseDev(amount, toAddress) {
         process.exit(1);
     }
     
-    const provider = new ethers.JsonRpcProvider(CONFIG.MOONBASE_RPC_URL);
+    const provider = new ethers.JsonRpcProvider(CONFIG.PASEO_RPC_URL);
     const wallet = new ethers.Wallet(CONFIG.EVM_PRIVATE_KEY, provider);
     const poolContract = new ethers.Contract(CONFIG.EVM_POOL_ADDRESS, POOL_ABI, wallet);
     
     console.log(`📋 Configuration:`);
     console.log(`   Pool Contract: ${CONFIG.EVM_POOL_ADDRESS}`);
     console.log(`   Admin: ${wallet.address}`);
-    console.log(`   Amount: ${amount} DEV`);
+    console.log(`   Amount: ${amount} PAS`);
     console.log(`   To: ${toAddress}`);
     console.log('');
     
@@ -55,14 +55,14 @@ async function releaseDev(amount, toAddress) {
         // Check pool balance
         console.log('📊 Checking pool balance...');
         const poolBalance = await poolContract.getBalance();
-        console.log(`   Pool Balance: ${ethers.formatEther(poolBalance)} DEV`);
+        console.log(`   Pool Balance: ${ethers.formatEther(poolBalance)} PAS`);
         
         const amountWei = ethers.parseEther(amount.toString());
         
         if (poolBalance < amountWei) {
             console.error(`\n❌ Error: Insufficient pool balance`);
-            console.error(`   Requested: ${amount} DEV`);
-            console.error(`   Available: ${ethers.formatEther(poolBalance)} DEV`);
+            console.error(`   Requested: ${amount} PAS`);
+            console.error(`   Available: ${ethers.formatEther(poolBalance)} PAS`);
             process.exit(1);
         }
         
@@ -87,20 +87,20 @@ async function releaseDev(amount, toAddress) {
         const receipt = await tx.wait();
         
         console.log('\n✅ ═══════════════════════════════════════════');
-        console.log('   DEV RELEASED SUCCESSFULLY!');
+        console.log('   PAS RELEASED SUCCESSFULLY!');
         console.log('═══════════════════════════════════════════════');
         console.log(`   TX Hash: ${tx.hash}`);
         console.log(`   Block: ${receipt.blockNumber}`);
-        console.log(`   Amount: ${amount} DEV`);
+        console.log(`   Amount: ${amount} PAS`);
         console.log(`   To: ${toAddress}`);
         console.log('');
         console.log(`   🔗 View on Explorer:`);
-        console.log(`   https://moonbase.moonscan.io/tx/${tx.hash}`);
+        console.log(`   https://blockscout-passet-hub.parity-testnet.parity.io/tx/${tx.hash}`);
         console.log('');
         
         // Check new pool balance
         const newBalance = await poolContract.getBalance();
-        console.log(`   New Pool Balance: ${ethers.formatEther(newBalance)} DEV`);
+        console.log(`   New Pool Balance: ${ethers.formatEther(newBalance)} PAS`);
         console.log('');
         
     } catch (error) {

@@ -48,12 +48,12 @@ Get your XLM back from the vault:
 node test/test-unlock-xlm.js 0.1
 ```
 
-### 5. Release DEV on EVM (Manual)
+### 5. Release PAS on EVM (Manual)
 
-Manually release DEV to an address:
+Manually release PAS to an address:
 
 ```bash
-# Release 0.1 DEV to an address
+# Release 0.1 PAS to an address
 node test/test-release-dev.js 0.1 0xRecipientAddress
 ```
 
@@ -71,7 +71,7 @@ node test/test-release-dev.js 0.1 0xRecipientAddress
 
 3. **Verify**: The watcher should show the lock event with your EVM address
 
-4. **Terminal 2**: Start the real relayer to auto-release DEV
+4. **Terminal 2**: Start the real relayer to auto-release PAS
    ```bash
    npm start
    ```
@@ -81,4 +81,4 @@ node test/test-release-dev.js 0.1 0xRecipientAddress
    node test/test-lock-xlm.js 0.1 0xYourMetaMaskAddress
    ```
 
-6. **Verify**: Relayer should detect and release DEV to your MetaMask
+6. **Verify**: Relayer should detect and release PAS to your MetaMask

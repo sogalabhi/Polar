@@ -30,7 +30,7 @@ const CONFIG = {
     COINGECKO_API: 'https://api.coingecko.com/api/v3',
     
     // Default exchange rates (fallback)
-    DEFAULT_DEV_TO_USDC: 0.05, // 1 DEV = 0.05 USDC
+    DEFAULT_PAS_TO_USDC: 3, // 1 PAS = 3 USDC
     DEFAULT_USDC_TO_INR: 83.5, // 1 USDC = 83.5 INR
 };
 
@@ -50,7 +50,7 @@ console.log(`🔑 Owner Stellar Address: ${ownerKeypair.publicKey()}`);
 
 // Cache for prices (refresh every 60 seconds)
 let priceCache = {
-    devToUsdc: CONFIG.DEFAULT_DEV_TO_USDC,
+    pasToUsdc: CONFIG.DEFAULT_PAS_TO_USDC,
     usdcToInr: CONFIG.DEFAULT_USDC_TO_INR,
     lastUpdated: 0
 };
@@ -67,7 +67,7 @@ async function fetchPrices() {
         // Fetch USDC/INR rate
         // Using CoinGecko - you might want to use a different API for INR rates
         const response = await fetch(
-            `${CONFIG.COINGECKO_API}/simple/price?ids=usd-coin,moonbeam&vs_currencies=inr,usd`
+            `${CONFIG.COINGECKO_API}/simple/price?ids=usd-coin,polkadot&vs_currencies=inr,usd`
         );
         const data = await response.json();
         
@@ -75,12 +75,12 @@ async function fetchPrices() {
             priceCache.usdcToInr = data['usd-coin'].inr;
         }
         
-        // DEV token doesn't have a direct price, so we estimate
-        // For testnet, use a fixed rate or fetch from DEX
-        // priceCache.devToUsdc = data['moonbeam']?.usd || CONFIG.DEFAULT_DEV_TO_USDC;
+        // PAS token doesn't have a direct price on mainnet, use Polkadot as reference
+        // For testnet (Paseo Asset Hub), use a fixed rate or adjust based on DOT
+        // priceCache.pasToUsdc = data['polkadot']?.usd || CONFIG.DEFAULT_PAS_TO_USDC;
         
         priceCache.lastUpdated = now;
-        console.log(`💰 Prices updated: 1 USDC = ₹${priceCache.usdcToInr}, 1 DEV = $${priceCache.devToUsdc}`);
+        console.log(`💰 Prices updated: 1 USDC = ₹${priceCache.usdcToInr}, 1 PAS = $${priceCache.pasToUsdc}`);
         
     } catch (error) {
         console.error('Error fetching prices:', error.message);
@@ -90,17 +90,17 @@ async function fetchPrices() {
     return priceCache;
 }
 
-// Calculate DEV to INR rate
-async function getDevToInrRate() {
+// Calculate PAS to INR rate
+async function getPasToInrRate() {
     const prices = await fetchPrices();
-    // DEV → USDC → INR
-    const devToInr = prices.devToUsdc * prices.usdcToInr;
+    // PAS → USDC → INR
+    const pasToInr = prices.pasToUsdc * prices.usdcToInr;
     return {
-        devToUsdc: prices.devToUsdc,
+        pasToUsdc: prices.pasToUsdc,
         usdcToInr: prices.usdcToInr,
-        devToInr: devToInr,
+        pasToInr: pasToInr,
         // Also calculate XLM rate (for internal use)
-        xlmToInr: devToInr // 1:1 ratio for DEV:XLM in our system
+        xlmToInr: pasToInr // 1:1 ratio for PAS:XLM in our system
     };
 }
 
@@ -191,17 +191,17 @@ app.get('/health', (req, res) => {
 // Get current exchange rates
 app.get('/api/rates', async (req, res) => {
     try {
-        const rates = await getDevToInrRate();
+        const rates = await getPasToInrRate();
         res.json({
             success: true,
             rates: {
-                devToInr: rates.devToInr,
-                devToUsdc: rates.devToUsdc,
+                pasToInr: rates.pasToInr,
+                pasToUsdc: rates.pasToUsdc,
                 usdcToInr: rates.usdcToInr
             },
             example: {
-                '10 DEV': `₹${(10 * rates.devToInr).toFixed(2)}`,
-                '₹500': `${(500 / rates.devToInr).toFixed(4)} DEV`
+                '10 PAS': `₹${(10 * rates.pasToInr).toFixed(2)}`,
+                '₹500': `${(500 / rates.pasToInr).toFixed(4)} PAS`
             }
         });
     } catch (error) {
@@ -254,23 +254,23 @@ app.get('/api/purchases/:userId', async (req, res) => {
 });
 
 // ============================================
-// MAIN: BUY DEV TOKENS
+// MAIN: BUY PAS TOKENS
 // ============================================
-app.post('/api/buy-dev', async (req, res) => {
-    const { userId, devAmount, evmAddress, slippageTolerance = 1 } = req.body;
+app.post('/api/buy-pas', async (req, res) => {
+    const { userId, pasAmount, evmAddress, slippageTolerance = 1 } = req.body;
     
     // Validate inputs
-    if (!userId || !devAmount || !evmAddress) {
+    if (!userId || !pasAmount || !evmAddress) {
         return res.status(400).json({
             success: false,
-            error: 'Missing required fields: userId, devAmount, evmAddress'
+            error: 'Missing required fields: userId, pasAmount, evmAddress'
         });
     }
     
-    if (devAmount <= 0) {
+    if (pasAmount <= 0) {
         return res.status(400).json({
             success: false,
-            error: 'devAmount must be positive'
+            error: 'pasAmount must be positive'
         });
     }
     
@@ -290,18 +290,18 @@ app.post('/api/buy-dev', async (req, res) => {
     }
     
     try {
-        console.log(`\n📥 Buy DEV request:`);
+        console.log(`\n📥 Buy PAS request:`);
         console.log(`   User: ${userId}`);
-        console.log(`   DEV Amount: ${devAmount}`);
+        console.log(`   PAS Amount: ${pasAmount}`);
         console.log(`   EVM Address: ${evmAddress}`);
         console.log(`   Slippage: ${slippageTolerance}%`);
         
         // 1. Get current rate
-        const rates = await getDevToInrRate();
-        const baseInrCost = devAmount * rates.devToInr;
+        const rates = await getPasToInrRate();
+        const baseInrCost = pasAmount * rates.pasToInr;
         const maxInrCost = baseInrCost * (1 + slippageTolerance / 100);
         
-        console.log(`   Rate: 1 DEV = ₹${rates.devToInr.toFixed(2)}`);
+        console.log(`   Rate: 1 PAS = ₹${rates.pasToInr.toFixed(2)}`);
         console.log(`   Base Cost: ₹${baseInrCost.toFixed(2)}`);
         console.log(`   Max Cost (with slippage): ₹${maxInrCost.toFixed(2)}`);
         
@@ -311,7 +311,8 @@ app.post('/api/buy-dev', async (req, res) => {
             .select('balance_inr')
             .eq('user_id', userId)
             .single();
-        
+
+
         if (walletError) {
             throw new Error(`Wallet not found: ${walletError.message}`);
         }
@@ -326,8 +327,8 @@ app.post('/api/buy-dev', async (req, res) => {
             });
         }
         
-        // 3. Calculate XLM to lock (1:1 with DEV for simplicity)
-        const xlmToLock = devAmount;
+        // 3. Calculate XLM to lock (1:1 with PAS for simplicity)
+        const xlmToLock = pasAmount;
         
         // 4. Start transaction - Deduct from wallet and create frozen record
         // Using actual cost (not max with slippage)
@@ -340,9 +341,9 @@ app.post('/api/buy-dev', async (req, res) => {
             .insert({
                 user_id: userId,
                 from_amount: actualInrCost,
-                to_token: 'DEV',
-                to_amount: devAmount,
-                exchange_rate: rates.devToInr,
+                to_token: 'PAS',
+                to_amount: pasAmount,
+                exchange_rate: rates.pasToInr,
                 destination_address: evmAddress,
                 xlm_locked: xlmToLock,
                 slippage_tolerance: slippageTolerance,
@@ -404,15 +405,15 @@ app.post('/api/buy-dev', async (req, res) => {
             .eq('id', purchase.id);
         
         console.log(`   ✅ XLM locked on Stellar: ${lockResult.txHash}`);
-        console.log(`   Waiting for relayer to send DEV...`);
+        console.log(`   Waiting for relayer to send PAS...`);
         
-        // 8. Return success (DEV will be sent by relayer)
+        // 8. Return success (PAS will be sent by relayer)
         res.json({
             success: true,
-            message: 'Purchase initiated. DEV tokens will be sent to your wallet shortly.',
+            message: 'Purchase initiated. PAS tokens will be sent to your wallet shortly.',
             data: {
                 purchaseId: purchase.id,
-                devAmount,
+                pasAmount,
                 inrSpent: actualInrCost,
                 evmAddress,
                 stellarTxHash: lockResult.txHash,
@@ -431,7 +432,7 @@ app.post('/api/buy-dev', async (req, res) => {
 });
 
 // ============================================
-// WEBHOOK: Called by relayer when DEV is sent
+// WEBHOOK: Called by relayer when PAS is sent
 // ============================================
 app.post('/api/purchase-completed', async (req, res) => {
     const { purchaseId, evmTxHash, evmAddress, stellarEventId, amount } = req.body;
@@ -552,16 +553,16 @@ app.listen(CONFIG.PORT, () => {
     console.log(`\n🚀 Polar Bridge API Server running on port ${CONFIG.PORT}`);
     console.log(`\n📡 Endpoints:`);
     console.log(`   GET  /health                  - Health check`);
-    console.log(`   GET  /api/rates               - Get DEV/INR exchange rate`);
+    console.log(`   GET  /api/rates               - Get PAS/INR exchange rate`);
     console.log(`   GET  /api/wallet/:userId      - Get user's INR balance`);
     console.log(`   GET  /api/purchases/:userId   - Get user's purchase history`);
-    console.log(`   POST /api/buy-dev             - Buy DEV tokens with INR`);
+    console.log(`   POST /api/buy-pas             - Buy PAS tokens with INR`);
     console.log(`   POST /api/purchase-completed  - Webhook for relayer`);
     console.log(`   POST /api/test/add-balance    - [TEST] Add INR to wallet`);
     console.log(`\n💡 Example buy request:`);
-    console.log(`   curl -X POST http://localhost:${CONFIG.PORT}/api/buy-dev \\`);
+    console.log(`   curl -X POST http://localhost:${CONFIG.PORT}/api/buy-pas \\`);
     console.log(`     -H "Content-Type: application/json" \\`);
-    console.log(`     -d '{"userId":"test-user-1","devAmount":0.1,"evmAddress":"0x...","slippageTolerance":1}'`);
+    console.log(`     -d '{"userId":"test-user-1","pasAmount":0.1,"evmAddress":"0x...","slippageTolerance":1}'`);
 });
 
 module.exports = app;

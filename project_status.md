@@ -4,8 +4,8 @@
 
 **Polar Bridge** is a cross-chain liquidity bridge enabling users to:
 1. Deposit INR via Razorpay → Receive crypto on Stellar/EVM
-2. Lock collateral on Stellar → Get liquidity on Moonbase (EVM)
-3. Lock collateral on Moonbase → Get liquidity on Stellar
+2. Lock collateral on Stellar → Get liquidity on Paseo Asset Hub (EVM)
+3. Lock collateral on Paseo Asset Hub → Get liquidity on Stellar
 
 ---
 
@@ -16,7 +16,7 @@
 | Component | Network | Address/ID | Status |
 |-----------|---------|------------|--------|
 | **Soroban Vault V2** | Stellar Testnet | `CDI75PQ4EA2VBTT7W6EZN2RGJIS4CFDMGT7WJ4L42T4ZSTNEKY42NY2B` | ✅ Deployed & Initialized |
-| **EVM Pool** | Moonbase Alpha (1287) | `0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6` | ✅ Deployed & Verified |
+| **EVM Pool** | Paseo Asset Hub (420420422) | `0x49e12e876588052A977dB816107B1772B4103E3e` | ✅ Deployed |
 | **ink! Pool** | Substrate | Compiled, not deployed | ⚠️ Optional |
 
 ### Contract Features Implemented
@@ -35,14 +35,14 @@
 | Pool | Balance | Status |
 |------|---------|--------|
 | Stellar Vault | 200 XLM | ✅ Funded |
-| EVM Pool | 1.0 DEV | ✅ Funded |
+| EVM Pool | 1.0 PAS | ✅ Funded |
 
 ### Admin Wallets
 
 | Network | Admin Address |
-|---------|---------------|
+|---------|--------------|
 | Stellar | `GBXLFRL35YDKSDMJJ2TT7VW25I7C7B76RKFYCB6FMIXWEAMAX3GESCN3` |
-| Moonbase EVM | `0xe8cb3F3BA7C674B6fb3C5B3cBe572964a5569D53` |
+| Paseo Asset Hub | `0xe8cb3F3BA7C674B6fb3C5B3cBe572964a5569D53` |
 | Polkadot | `5HQk4ZLKzZykLNV4YkoMEzVUG1Hu6QEtaQFvnnfFprUuYtSK` |
 
 ### Relayer
@@ -66,10 +66,10 @@
 
 | Task | Description | Estimated Effort |
 |------|-------------|------------------|
-| 1. ~~Update Relayer for EVM~~ | ~~Add Moonbase Alpha support~~ | ✅ Done |
+| 1. ~~Update Relayer for EVM~~ | ~~Add Paseo Asset Hub support~~ | ✅ Done |
 | 2. ~~Fund Both Pools~~ | ~~Deposit liquidity~~ | ✅ Done |
 | 3. ~~Create .env files~~ | ~~Add all secret keys~~ | ✅ Done |
-| 4. **Test End-to-End Bridge** | Lock XLM → Get DEV | 30 min |
+| 4. **Test End-to-End Bridge** | Lock XLM → Get PAS | 30 min |
 | 5. Razorpay Integration | Webhook handler, INR → Crypto | 2-3 hours |
 
 ### Medium Priority
@@ -85,7 +85,7 @@
 | Task | Description |
 |------|-------------|
 | Deploy ink! Pool | Deploy to Substrate chain |
-| Price Oracle | Live XLM/DEV price feed |
+| Price Oracle | Live XLM/PAS price feed |
 | Multi-token Support | Support multiple tokens |
 | Production Deployment | Mainnet contracts |
 
@@ -146,15 +146,15 @@
      ▼                   ▼                     ▼                    ▼
 ```
 
-### Flow 2: Lock XLM on Stellar → Get DEV on Moonbase
+### Flow 2: Lock XLM on Stellar → Get PAS on Paseo Asset Hub
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    STELLAR → MOONBASE BRIDGE FLOW                           │
+│                    STELLAR → PASEO ASSET HUB BRIDGE FLOW                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐
-│   USER   │    │   STELLAR    │    │   RELAYER    │    │   MOONBASE EVM   │
+│   USER   │    │   STELLAR    │    │   RELAYER    │    │ PASEO ASSET HUB  │
 │          │    │    VAULT     │    │  (Node.js)   │    │      POOL        │
 └────┬─────┘    └──────┬───────┘    └──────┬───────┘    └────────┬─────────┘
      │                 │                   │                     │
@@ -183,24 +183,24 @@
      │                 │                   │     (to, amount)    │
      │                 │                   │────────────────────>│
      │                 │                   │                     │
-     │                 │                   │                     │ 7. Transfer DEV
+     │                 │                   │                     │ 7. Transfer PAS
      │                 │                   │                     │    to user
      │                 │                   │                     │
-     │  8. DEV received in MetaMask!       │                     │
+     │  8. PAS received in MetaMask!       │                     │
      │<───────────────────────────────────────────────────────────
      │                 │                   │                     │
      ▼                 ▼                   ▼                     ▼
 ```
 
-### Flow 3: Lock DEV on Moonbase → Get XLM on Stellar
+### Flow 3: Lock PAS on Paseo Asset Hub → Get XLM on Stellar
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    MOONBASE → STELLAR BRIDGE FLOW                           │
+│                    PASEO ASSET HUB → STELLAR BRIDGE FLOW                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────┐    ┌──────────────────┐    ┌──────────────┐    ┌──────────────┐
-│   USER   │    │   MOONBASE EVM   │    │   RELAYER    │    │   STELLAR    │
+│   USER   │    │ PASEO ASSET HUB  │    │   RELAYER    │    │   STELLAR    │
 │          │    │      POOL        │    │  (Node.js)   │    │    VAULT     │
 └────┬─────┘    └────────┬─────────┘    └──────┬───────┘    └──────┬───────┘
      │                   │                     │                   │
@@ -209,7 +209,7 @@
      │     in tx data    │                     │                   │
      │──────────────────>│                     │                   │
      │                   │                     │                   │
-     │                   │  2. Lock DEV        │                   │
+     │                   │  2. Lock PAS        │                   │
      │                   │     in contract     │                   │
      │                   │                     │                   │
      │                   │  3. Emit            │                   │
@@ -250,8 +250,8 @@
                                        ▼
 ┌─────────────────┐           ┌─────────────────┐           ┌─────────────────┐
 │                 │           │                 │           │                 │
-│  STELLAR        │◄─────────►│    RELAYER      │◄─────────►│  MOONBASE       │
-│  TESTNET        │  Events   │   (Node.js)     │  Events   │  ALPHA          │
+│  STELLAR        │◄─────────►│    RELAYER      │◄─────────►│  PASEO         │
+│  TESTNET        │  Events   │   (Node.js)     │  Events   │  ASSET HUB     │
 │                 │           │                 │           │  (EVM)          │
 │ ┌─────────────┐ │           │  • Event Loop   │           │ ┌─────────────┐ │
 │ │ Soroban     │ │           │  • TX Signing   │           │ │ PolkaBridge │ │
@@ -290,8 +290,8 @@ polar/
 │   │   ├── Cargo.toml           # ✅ Dependencies
 │   │   └── contract_id.txt      # ✅ Deployed addresses
 │   │
-│   ├── evm-pool/                # ✅ Moonbase EVM Pool
-│   │   └── PolkaBridgePool.sol  # ✅ Deployed & Verified
+│   ├── evm-pool/                # ✅ Paseo Asset Hub EVM Pool
+│   │   └── PolkaBridgePool.sol  # ✅ Deployed
 │   │
 │   ├── ink-pool/                # ⚠️ Optional Substrate Pool
 │   │   ├── lib.rs               # ✅ Compiled
@@ -326,9 +326,9 @@ VAULT_CONTRACT_ID=CC6EIPVGWIIRI73VCJ3VJYLKMQGK7VBKAML5W5GVGZMFLATRYZICJ26A
 STELLAR_ADMIN=GBXLFRL35YDKSDMJJ2TT7VW25I7C7B76RKFYCB6FMIXWEAMAX3GESCN3
 STELLAR_RELAYER_SECRET=S...  # Get from Freighter
 
-# Moonbase Alpha EVM Configuration
-MOONBASE_RPC_URL=https://rpc.api.moonbase.moonbeam.network
-EVM_POOL_ADDRESS=0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6
+# Paseo Asset Hub EVM Configuration
+PASEO_RPC_URL=https://testnet-passet-hub-eth-rpc.polkadot.io
+EVM_POOL_ADDRESS=0x49e12e876588052A977dB816107B1772B4103E3e
 EVM_ADMIN=0xe8cb3F3BA7C674B6fb3C5B3cBe572964a5569D53
 EVM_RELAYER_PRIVATE_KEY=0x...  # Get from MetaMask
 
@@ -358,13 +358,13 @@ STELLAR_TOKEN=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 ## 📞 Quick Commands
 
 ```bash
-# Fund EVM Pool (send DEV via Remix or MetaMask)
+# Fund EVM Pool (send PAS via Remix or MetaMask)
 # Go to: https://remix.ethereum.org
-# Load PolkaBridgePool at 0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6
+# Load PolkaBridgePool at 0x49e12e876588052A977dB816107B1772B4103E3e
 # Call fund() with value
 
 # Check EVM Pool Balance
-cast call 0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6 "getBalance()" --rpc-url https://rpc.api.moonbase.moonbeam.network
+cast call 0x49e12e876588052A977dB816107B1772B4103E3e "getBalance()" --rpc-url https://testnet-passet-hub-eth-rpc.polkadot.io
 
 # Run Relayer
 cd relayer && npm start

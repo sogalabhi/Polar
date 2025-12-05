@@ -2,7 +2,7 @@
  * TEST: Lock XLM on Stellar Vault
  * 
  * This script locks XLM from the owner's account on the Stellar vault contract.
- * The relayer should detect this lock event and release DEV on EVM.
+ * The relayer should detect this lock event and release PAS on EVM.
  * 
  * Usage: node test/test-lock-xlm.js <amount_xlm> <evm_address>
  * Example: node test/test-lock-xlm.js 0.1 0xYourMetaMaskAddress
@@ -125,7 +125,7 @@ async function lockXlm(amountXlm, evmAddress) {
             console.log(`   EVM Address: ${evmAddress}`);
             console.log('');
             console.log('🔭 The relayer should now detect this event');
-            console.log('   and release DEV tokens to the EVM address.');
+            console.log('   and release PAS tokens to the EVM address.');
             console.log('');
             
             return {

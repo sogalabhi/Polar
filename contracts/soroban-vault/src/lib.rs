@@ -31,7 +31,7 @@ impl VaultContract {
     /// # Arguments
     /// * `from` - The Stellar address depositing XLM
     /// * `amount` - Amount of XLM to lock (in stroops, 1 XLM = 10^7 stroops)
-    /// * `evm_address` - The user's EVM address (e.g., "0x1234...") to receive liquidity on Moonbase
+    /// * `evm_address` - The user's EVM address (e.g., "0x1234...") to receive liquidity on Paseo Asset Hub
     pub fn lock(env: Env, from: Address, amount: i128, evm_address: String) {
         from.require_auth();
         

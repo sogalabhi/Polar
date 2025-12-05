@@ -212,11 +212,11 @@ async function watchStellarEvents(onLockEvent, processedData) {
                         console.log(`   Locked Amount: ${amount} stroops`);
                         
                         // Calculate loan amount (amount * LTV)
-                        // Convert stroops to DEV (1 XLM = 1 DEV for simplicity)
+                        // Convert stroops to PAS (1 XLM = 1 PAS for simplicity)
                         const xlmAmount = Number(amount) / 10000000; // stroops to XLM
                         const loanAmountDev = xlmAmount * CONFIG.LTV_RATIO;
                         
-                        console.log(`   Loan Amount (${CONFIG.LTV_RATIO * 100}% LTV): ${loanAmountDev} DEV`);
+                        console.log(`   Loan Amount (${CONFIG.LTV_RATIO * 100}% LTV): ${loanAmountDev} PAS`);
                         
                         await onLockEvent({
                             eventId: event.id,
@@ -301,7 +301,7 @@ async function watchEvmEvents(evm, onEvmDeposit, processedData) {
                 console.log(`   Block: ${event.blockNumber}`);
                 console.log(`   TX Hash: ${txHash}`);
                 console.log(`   From: ${from}`);
-                console.log(`   Amount: ${ethers.formatEther(amount)} DEV`);
+                console.log(`   Amount: ${ethers.formatEther(amount)} PAS`);
                 
                 // Get transaction data to extract Stellar address
                 const tx = await provider.getTransaction(txHash);
@@ -319,7 +319,7 @@ async function watchEvmEvents(evm, onEvmDeposit, processedData) {
                     }
                 }
                 
-                // Calculate XLM amount to release (DEV to XLM, 1:1 for simplicity)
+                // Calculate XLM amount to release (PAS to XLM, 1:1 for simplicity)
                 const devAmount = parseFloat(ethers.formatEther(amount));
                 const xlmLoanAmount = devAmount * CONFIG.LTV_RATIO;
                 
@@ -369,7 +369,7 @@ async function releaseOnEvm(evm, eventData) {
     if (!evm) {
         console.log('⚠️  EVM not configured. Would release:');
         console.log(`   To: ${eventData.evmAddress}`);
-        console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} DEV`);
+        console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
         return;
     }
     
@@ -377,13 +377,13 @@ async function releaseOnEvm(evm, eventData) {
     
     console.log(`💸 Releasing liquidity on Paseo Asset Hub...`);
     console.log(`   To: ${eventData.evmAddress}`);
-    console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} DEV`);
+    console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
     
     try {
         // Check pool balance first
         const poolBalance = await poolContract.getBalance();
         if (poolBalance < eventData.loanAmountWei) {
-            console.error(`❌ Insufficient pool balance: ${ethers.formatEther(poolBalance)} DEV`);
+            console.error(`❌ Insufficient pool balance: ${ethers.formatEther(poolBalance)} PAS`);
             return;
         }
         
@@ -399,7 +399,7 @@ async function releaseOnEvm(evm, eventData) {
         const receipt = await tx.wait();
         console.log(`✅ EVM TX confirmed in block ${receipt.blockNumber}`);
         
-        // Notify API server that DEV was sent (if server is running)
+        // Notify API server that PAS was sent (if server is running)
         try {
             const response = await fetch(`${CONFIG.API_SERVER_URL}/api/purchase-completed`, {
                 method: 'POST',

@@ -116,7 +116,7 @@ async function watchEvents() {
                         console.log(`      Amount: ${xlmAmount.toFixed(7)} XLM`);
                         console.log(`      (${amount} stroops)`);
                         console.log('');
-                        console.log('   ✅ Relayer should now send DEV to:', evmAddress);
+                        console.log('   ✅ Relayer should now send PAS to:', evmAddress);
                         console.log('═══════════════════════════════════════════════');
                         console.log('');
                         

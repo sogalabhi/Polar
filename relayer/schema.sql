@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS inr_deposits (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Crypto Purchases (INR → DEV)
+-- Crypto Purchases (INR → PAS)
 -- This is the "frozen" table that tracks each purchase
 CREATE TABLE IF NOT EXISTS crypto_purchases (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,9 +40,9 @@ CREATE TABLE IF NOT EXISTS crypto_purchases (
     from_amount DECIMAL(15, 2) NOT NULL,        -- INR spent
     
     -- Crypto side
-    to_token TEXT NOT NULL DEFAULT 'DEV',       -- Token bought
-    to_amount DECIMAL(18, 8) NOT NULL,          -- Amount of DEV
-    exchange_rate DECIMAL(15, 6) NOT NULL,      -- Rate at time of purchase (1 DEV = X INR)
+    to_token TEXT NOT NULL DEFAULT 'PAS',       -- Token bought
+    to_amount DECIMAL(18, 8) NOT NULL,          -- Amount of PAS
+    exchange_rate DECIMAL(15, 6) NOT NULL,      -- Rate at time of purchase (1 PAS = X INR)
     
     -- User's destination
     destination_address TEXT NOT NULL,           -- User's EVM address (MetaMask)
@@ -58,12 +58,12 @@ CREATE TABLE IF NOT EXISTS crypto_purchases (
     -- pending: order created
     -- frozen: INR deducted from wallet
     -- locked: XLM locked on Stellar, waiting for relayer
-    -- completed: DEV sent to user
+    -- completed: PAS sent to user
     -- failed: something went wrong
     
     -- Transaction hashes
     stellar_tx_hash TEXT,                       -- Lock TX on Stellar
-    evm_tx_hash TEXT,                           -- Release TX on Moonbase
+    evm_tx_hash TEXT,                           -- Release TX on Paseo Asset Hub
     
     -- Error handling
     error_message TEXT,

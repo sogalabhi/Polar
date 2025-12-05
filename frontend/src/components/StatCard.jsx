@@ -1,5 +1,3 @@
-import React from 'react';
-
 const StatCard = ({ title, value, icon, subValue, trend }) => {
   return (
     <div className="bg-white/5 backdrop-blur-sm border border-white/10 p-6 rounded-2xl hover:border-green-500/30 transition-all duration-300 group">
