@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "@polkadot/api": "^16.5.3",
+    "@stellar/stellar-sdk": "^14.4.1",
     "@types/node": "^24.10.1",
     "dotenv": "^17.2.3",
     "stellar-sdk": "^13.3.0",

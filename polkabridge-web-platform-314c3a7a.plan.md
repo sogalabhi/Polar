@@ -107,12 +107,12 @@ Monorepo organization:
 
 ### Web3 Dev Tasks
 
-- Create wallet connection utilities (`frontend/src/utils/wallets.ts`):
+- Create wallet connection utilities (`frontend/src/utils/wallets.js`):
 - `connectFreighter()` - Stellar wallet connection
 - `connectPolkadot()` - Polkadot wallet connection
 - `getStellarBalance()` - Query USDC balance
 - `getPolkadotBalance()` - Query DOT balance
-- Create contract interaction hooks (`frontend/src/hooks/useContracts.ts`):
+- Create contract interaction hooks (`frontend/src/hooks/useContracts.js`):
 - `useStellarContract()` - Soroban contract instance
 - `usePolkadotContract()` - Ink! contract instance
 - Transaction signing helpers
@@ -121,7 +121,7 @@ Monorepo organization:
 
 ### Web3 Dev Tasks
 
-**Relayer Core** (`relayer/src/index.ts`):
+**Relayer Core** (`relayer/src/index.js`):
 
 - Setup Stellar SDK connection to Testnet Horizon
 - Setup Polkadot API connection to Paseo Testnet
@@ -139,7 +139,7 @@ Monorepo organization:
 - Submit transaction and wait for finality
 - Mark event as processed
 
-**Razorpay Integration** (`relayer/src/razorpay.ts`):
+**Razorpay Integration** (`relayer/src/razorpay.js`):
 
 - Express.js webhook endpoint: `POST /api/razorpay-webhook`
 - Verify Razorpay webhook signature
@@ -170,7 +170,7 @@ Monorepo organization:
 - Show loading state while backend mints USDC
 - Refresh Stellar balance after success
 
-**Transaction Flow** (`frontend/src/hooks/useBridge.ts`):
+**Transaction Flow** (`frontend/src/hooks/useBridge.js`):
 
 - `bridgeLiquidity()` function:
 
@@ -229,17 +229,17 @@ Monorepo organization:
 - `frontend/src/pages/Dashboard.tsx` - Main dashboard
 - `frontend/src/components/WalletModal.tsx` - Wallet connection
 - `frontend/src/components/TransactionTunnel.tsx` - Transaction progress
-- `frontend/src/hooks/useBridge.ts` - Bridge transaction logic
-- `frontend/src/utils/wallets.ts` - Wallet utilities
+- `frontend/src/hooks/useBridge.js` - Bridge transaction logic
+- `frontend/src/utils/wallets.js` - Wallet utilities
 - `frontend/tailwind.config.js` - Tailwind configuration
 
 **Relayer:**
 
-- `relayer/src/index.ts` - Main relayer loop
-- `relayer/src/razorpay.ts` - Razorpay webhook handler
-- `relayer/src/stellar.ts` - Stellar event listener
-- `relayer/src/polkadot.ts` - Polkadot transaction sender
-- `relayer/src/db.ts` - Processed events storage
+- `relayer/src/index.js` - Main relayer loop
+- `relayer/src/razorpay.js` - Razorpay webhook handler
+- `relayer/src/stellar.js` - Stellar event listener
+- `relayer/src/polkadot.js` - Polkadot transaction sender
+- `relayer/src/db.js` - Processed events storage
 
 **Contracts:**
 
