@@ -63,6 +63,8 @@ const Dashboard = () => {
   const [loanPreview, setLoanPreview] = useState(null);
   const [activeLoans, setActiveLoans] = useState([]);
   const [loansLoading, setLoansLoading] = useState(false);
+  const [loanSummary, setLoanSummary] = useState({ loan_count: 0, total_collateral_xlm: 0, total_borrowed_pas: 0, total_borrowed_inr: 0 });
+  const [loanPrices, setLoanPrices] = useState({ xlm: 0, pas: 0 });
   const [LOAN_TYPES, setLoanTypes] = useState(DEFAULT_LOAN_TYPES);
   
   // Get wallet data from Supabase via useWallet hook
@@ -140,6 +142,18 @@ const Dashboard = () => {
           xlmPrice: parseFloat(loan.current_xlm_price) || 0,
         }));
         setActiveLoans(transformedLoans);
+        // Set auth prices
+        if (data.prices) setLoanPrices(data.prices);
+        // Fetch summary from view
+        try {
+          const summaryResp = await fetch(`${API_BASE}/api/loans/${address}/summary`);
+          const summaryData = await summaryResp.json();
+          if (summaryData.success && summaryData.summary) {
+            setLoanSummary(summaryData.summary);
+          }
+        } catch (err) {
+          console.error('Failed to fetch loan summary:', err);
+        }
       }
     } catch (error) {
       console.error('Failed to fetch active loans:', error);
@@ -579,6 +593,203 @@ const Dashboard = () => {
     }
   };
 
+  // State for repay/add collateral modals
+  const [repayingLoanId, setRepayingLoanId] = useState(null);
+  const [addingCollateralLoanId, setAddingCollateralLoanId] = useState(null);
+  const [additionalCollateral, setAdditionalCollateral] = useState('');
+  const [showCollateralModal, setShowCollateralModal] = useState(false);
+  const [selectedLoanForCollateral, setSelectedLoanForCollateral] = useState(null);
+
+  // Handle loan repayment with PAS
+  const handleRepayLoan = async (loan) => {
+    if (!isConnected) {
+      alert('Please connect your wallet first!');
+      return;
+    }
+
+    setRepayingLoanId(loan.id);
+    try {
+      // Step 1: Get repayment details from API
+      console.log('\n💰 ═══════════════════════════════════════════════════════════════════');
+      console.log('   USER ACTION: Repay Loan with PAS');
+      console.log('═══════════════════════════════════════════════════════════════════════');
+      console.log(`   📋 Loan ID: ${loan.id}`);
+      
+      const detailsResponse = await fetch(`${API_BASE}/api/lending/repay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: address,
+          loanId: loan.id
+        })
+      });
+
+      const detailsResult = await detailsResponse.json();
+      
+      if (!detailsResult.success) {
+        throw new Error(detailsResult.error || 'Failed to get repayment details');
+      }
+
+      const { repaymentDetails, loan: loanInfo } = detailsResult;
+      const totalPas = repaymentDetails.totalPas;
+      
+      console.log(`   💰 Total Due: ${totalPas.toFixed(4)} PAS (₹${repaymentDetails.totalInr.toFixed(2)})`);
+      console.log(`   🔒 Collateral to release: ${loanInfo.collateralXlm?.toFixed(4)} XLM`);
+      
+      // Check PAS balance
+      if (parseFloat(realPasBalance) < totalPas) {
+        alert(`Insufficient PAS balance. You have ${parseFloat(realPasBalance).toFixed(4)} PAS, need ${totalPas.toFixed(4)} PAS`);
+        setRepayingLoanId(null);
+        return;
+      }
+
+      // Confirm with user
+      if (!window.confirm(`Send ${totalPas.toFixed(4)} PAS to repay this loan?\n\nBreakdown:\n- Principal: ${repaymentDetails.principalPas.toFixed(4)} PAS\n- Interest: ${repaymentDetails.interestPas.toFixed(4)} PAS\n- Late Fee: ${repaymentDetails.lateFeePas.toFixed(4)} PAS\n\nYour collateral (${loanInfo.collateralXlm?.toFixed(4)} XLM) will be released.`)) {
+        setRepayingLoanId(null);
+        return;
+      }
+
+      // Step 2: Send PAS to pool via MetaMask
+      console.log('\n   🔄 Step 2: Sending PAS to pool via MetaMask...');
+      const poolAddress = repaymentDetails.poolAddress;
+      const amountWei = BigInt(Math.floor(totalPas * 1e18)).toString(16);
+      
+      const txHash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{
+          from: address,
+          to: poolAddress,
+          value: '0x' + amountWei,
+        }],
+      });
+
+      console.log(`   🔗 TX Hash: ${txHash}`);
+      console.log('   ⏳ Waiting for confirmation...');
+
+      // Step 3: Confirm repayment with backend
+      console.log('\n   🔄 Step 3: Confirming repayment...');
+      const confirmResponse = await fetch(`${API_BASE}/api/lending/repay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: address,
+          loanId: loan.id,
+          txHash: txHash
+        })
+      });
+
+      const result = await confirmResponse.json();
+
+      if (result.success) {
+        console.log('\n   ═══════════════════════════════════════════════════════════════');
+        console.log('   ✅ LOAN REPAID SUCCESSFULLY!');
+        console.log('   ═══════════════════════════════════════════════════════════════');
+        console.log(`   💰 Total Paid: ${result.repayment?.totalPaidPas?.toFixed(4)} PAS`);
+        console.log(`   🔓 Collateral Released: ${result.collateral?.xlm?.toFixed(4)} XLM`);
+        console.log(`   🔗 TX: ${txHash}`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+
+        setNotifications(prev => [{
+          title: 'Loan Repaid!',
+          message: `Paid ${result.repayment?.totalPaidPas?.toFixed(4)} PAS. Your ${result.collateral?.xlm?.toFixed(4)} XLM collateral has been released.`,
+          time: 'Just now',
+          type: 'success'
+        }, ...prev]);
+
+        // Refresh loans and wallet data
+        await Promise.all([fetchActiveLoans(), refresh()]);
+      } else {
+        throw new Error(result.error || 'Failed to confirm repayment');
+      }
+    } catch (error) {
+      console.error('\n   ❌ REPAY ERROR:', error.message);
+      setNotifications(prev => [{
+        title: 'Repayment Failed',
+        message: error.message,
+        time: 'Just now',
+        type: 'error'
+      }, ...prev]);
+    } finally {
+      setRepayingLoanId(null);
+    }
+  };
+
+  // Handle adding collateral to loan
+  const handleAddCollateral = async () => {
+    if (!isConnected || !selectedLoanForCollateral) {
+      alert('Please connect your wallet first!');
+      return;
+    }
+
+    const xlmAmount = parseFloat(additionalCollateral);
+    if (!xlmAmount || xlmAmount <= 0) {
+      alert('Please enter a valid XLM amount');
+      return;
+    }
+
+    console.log('\n📈 ═══════════════════════════════════════════════════════════════════');
+    console.log('   USER ACTION: Add Collateral');
+    console.log('═══════════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Loan ID: ${selectedLoanForCollateral.id}`);
+    console.log(`   🔒 Additional XLM: ${xlmAmount}`);
+    console.log('═══════════════════════════════════════════════════════════════════════\n');
+
+    setAddingCollateralLoanId(selectedLoanForCollateral.id);
+    try {
+      const response = await fetch(`${API_BASE}/api/lending/add-collateral`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: address,
+          loanId: selectedLoanForCollateral.id,
+          additionalXlm: xlmAmount
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        console.log('\n   ═══════════════════════════════════════════════════════════════');
+        console.log('   ✅ COLLATERAL ADDED SUCCESSFULLY!');
+        console.log('   ═══════════════════════════════════════════════════════════════');
+        console.log(`   📊 Health Factor: ${result.loan?.healthFactor?.previous?.toFixed(2)} → ${result.loan?.healthFactor?.new?.toFixed(2)}`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+
+        setNotifications(prev => [{
+          title: 'Collateral Added!',
+          message: `Added ${xlmAmount} XLM. Health factor improved: ${result.loan?.healthFactor?.previous?.toFixed(2)} → ${result.loan?.healthFactor?.new?.toFixed(2)}`,
+          time: 'Just now',
+          type: 'success'
+        }, ...prev]);
+
+        // Reset and refresh
+        setShowCollateralModal(false);
+        setSelectedLoanForCollateral(null);
+        setAdditionalCollateral('');
+        await Promise.all([fetchActiveLoans(), refresh()]);
+      } else {
+        throw new Error(result.error || 'Failed to add collateral');
+      }
+    } catch (error) {
+      console.error('\n   ❌ ADD COLLATERAL ERROR:', error.message);
+      setNotifications(prev => [{
+        title: 'Add Collateral Failed',
+        message: error.message,
+        time: 'Just now',
+        type: 'error'
+      }, ...prev]);
+    } finally {
+      setAddingCollateralLoanId(null);
+    }
+  };
+
+  // Open add collateral modal
+  const openCollateralModal = (loan) => {
+    setSelectedLoanForCollateral(loan);
+    setShowCollateralModal(true);
+    setAdditionalCollateral('');
+  };
+
   return (
     <div className="min-h-screen bg-black text-white font-mono relative overflow-hidden selection:bg-green-500 selection:text-black">
       <InteractiveBackground />
@@ -672,8 +883,8 @@ const Dashboard = () => {
                 isLoading={isLoading}
             />
             <StatCard 
-                title="Total Collateral" 
-                value={`₹ ${(activeLoans.reduce((sum, l) => sum + l.collateralValueInr, 0) + totalStakedInr).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+              title="Total Collateral" 
+              value={`₹ ${( (loanSummary.total_collateral_xlm ? (loanSummary.total_collateral_xlm * loanPrices.xlm) : activeLoans.reduce((sum, l) => sum + l.collateralValueInr, 0)) + totalStakedInr).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>}
                 subValue="Locked in Loans"
                 isLoading={isLoading}
@@ -1150,10 +1361,18 @@ const Dashboard = () => {
                     
                     {/* Actions */}
                     <div className="flex gap-3">
-                      <button className="flex-1 py-3 bg-green-500 text-black font-bold rounded-xl hover:bg-green-400 transition-all">
-                        Repay ₹{totalDue.toFixed(0)}
+                      <button 
+                        onClick={() => handleRepayLoan(loan)}
+                        disabled={repayingLoanId === loan.id}
+                        className="flex-1 py-3 bg-green-500 text-black font-bold rounded-xl hover:bg-green-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {repayingLoanId === loan.id ? 'Sending PAS...' : `Repay ${(totalDue / pasInrRate).toFixed(2)} PAS`}
                       </button>
-                      <button className="flex-1 py-3 bg-blue-500/20 border border-blue-500/30 text-blue-400 font-medium rounded-xl hover:bg-blue-500/30 transition-all">
+                      <button 
+                        onClick={() => openCollateralModal(loan)}
+                        disabled={addingCollateralLoanId === loan.id}
+                        className="flex-1 py-3 bg-blue-500/20 border border-blue-500/30 text-blue-400 font-medium rounded-xl hover:bg-blue-500/30 transition-all disabled:opacity-50"
+                      >
                         + Collateral
                       </button>
                     </div>
@@ -1298,6 +1517,94 @@ const Dashboard = () => {
           </div>
         )}
       </main>
+
+      {/* Add Collateral Modal */}
+      {showCollateralModal && selectedLoanForCollateral && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-gray-900 border border-white/10 rounded-2xl p-6 max-w-md w-full"
+          >
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold">Add Collateral</h2>
+              <button 
+                onClick={() => setShowCollateralModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Current Loan Info */}
+            <div className="bg-white/5 rounded-xl p-4 mb-4">
+              <div className="flex justify-between mb-2">
+                <span className="text-gray-400">Current Collateral</span>
+                <span className="font-bold">{selectedLoanForCollateral.collateralXlm?.toFixed(4)} XLM</span>
+              </div>
+              <div className="flex justify-between mb-2">
+                <span className="text-gray-400">Current Health Factor</span>
+                <HealthFactorBadge factor={selectedLoanForCollateral.healthFactor || 0} />
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Borrowed</span>
+                <span className="text-purple-400">₹{selectedLoanForCollateral.borrowedValueInr?.toFixed(0)}</span>
+              </div>
+            </div>
+
+            {/* Input */}
+            <div className="mb-4">
+              <label className="block text-sm text-gray-400 mb-2">Additional XLM to Lock</label>
+              <input
+                type="number"
+                value={additionalCollateral}
+                onChange={(e) => setAdditionalCollateral(e.target.value)}
+                placeholder="Enter XLM amount"
+                className="w-full px-4 py-3 bg-black/50 border border-white/10 rounded-xl focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Preview */}
+            {additionalCollateral && parseFloat(additionalCollateral) > 0 && (
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 mb-4">
+                <h4 className="text-sm font-bold text-blue-400 mb-2">Preview After Adding</h4>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">New Total Collateral</span>
+                  <span>{(selectedLoanForCollateral.collateralXlm + parseFloat(additionalCollateral)).toFixed(4)} XLM</span>
+                </div>
+                <div className="flex justify-between text-sm mt-1">
+                  <span className="text-gray-400">Estimated Health Factor</span>
+                  <span className="text-green-400">
+                    ~{(((selectedLoanForCollateral.collateralXlm + parseFloat(additionalCollateral)) * (selectedLoanForCollateral.xlmPrice || 18)) * 0.85 / selectedLoanForCollateral.borrowedValueInr).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Info */}
+            <p className="text-xs text-gray-500 mb-4">
+              💡 Adding collateral improves your health factor and reduces liquidation risk. You'll need to lock additional XLM in the vault.
+            </p>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCollateralModal(false)}
+                className="flex-1 py-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddCollateral}
+                disabled={!additionalCollateral || parseFloat(additionalCollateral) <= 0 || addingCollateralLoanId}
+                className="flex-1 py-3 bg-blue-500 text-white font-bold rounded-xl hover:bg-blue-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {addingCollateralLoanId ? 'Adding...' : 'Add Collateral'}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       <NotificationModal 
         isOpen={isNotifOpen} 

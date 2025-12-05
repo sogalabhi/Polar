@@ -49,6 +49,9 @@ const CONFIG = {
     EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x49e12e876588052A977dB816107B1772B4103E3e',
     EVM_RELAYER_PRIVATE_KEY: process.env.EVM_RELAYER_PRIVATE_KEY || '',
     
+    // Payback / Buyback fees (percentage, e.g., 0.01 = 1%)
+    PAYBACK_FEE_PERCENT: parseFloat(process.env.PAYBACK_FEE_PERCENT || '0'),
+    
     // Razorpay Configuration
     RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
@@ -894,7 +897,30 @@ app.post('/api/payback-pas', async (req, res) => {
         
         // 1. Get current rate
         const rates = await getPasToInrRate();
-        const inrToReceive = pasAmount * rates.pasToInr;
+        // Default: market rate conversion
+        let inrToReceive = pasAmount * rates.pasToInr;
+        let useStakePrincipal = false;
+        let paybackFeePercent = (CONFIG.PAYBACK_FEE_PERCENT || 0);
+
+        // If stakeId provided, fetch the stake / purchase to return original INR (minus fee)
+        let paybackRecord = null;
+        if (stakeId) {
+            const { data: stake } = await supabase
+                .from('crypto_purchases')
+                .select('id, from_amount, to_amount, status')
+                .eq('id', stakeId)
+                .eq('user_id', normalizedAddress)
+                .single();
+            if (stake) {
+                paybackRecord = stake;
+                useStakePrincipal = true;
+                const principalInr = parseFloat(stake.from_amount || 0);
+                inrToReceive = principalInr * (1 - paybackFeePercent);
+                console.log(`   📋 Using stake principal: ₹${principalInr} → after fee: ₹${inrToReceive.toFixed(2)}`);
+            } else {
+                console.warn('   ⚠️  Stake ID provided but not found, falling back to market rate');
+            }
+        }
         
         console.log(`   📈 Rate: 1 PAS = ₹${rates.pasToInr.toFixed(2)}`);
         console.log(`   💰 INR to receive: ₹${inrToReceive.toFixed(2)}`);
@@ -958,7 +984,7 @@ app.post('/api/payback-pas', async (req, res) => {
                 poolAddress,
                 amountPas: pasAmount,
                 amountWei,
-                inrToReceive: inrToReceive.toFixed(2),
+            inrToReceive: inrToReceive.toFixed(2),
                 exchangeRate: rates.pasToInr,
                 instructions: [
                     '1. Click "Confirm Payback" to open MetaMask',
@@ -1004,7 +1030,30 @@ app.post('/api/payback-completed', async (req, res) => {
         
         // 1. Get current rate and calculate INR
         const rates = await getPasToInrRate();
-        const inrToCredit = parseFloat(pasAmount) * rates.pasToInr;
+        let inrToCredit = parseFloat(pasAmount) * rates.pasToInr;
+        // 1b. If there is an associated payback record (stake), prefer original INR provided in record
+        const { data: payback } = await supabase
+            .from('crypto_purchases')
+            .select('id, from_amount')
+            .eq('destination_address', normalizedAddress)
+            .eq('status', 'pending_payback')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+        if (payback && payback.from_amount) {
+            // If a payback record exists, verify the PAS amount matches
+            const expectedPas = parseFloat(payback.to_amount || 0);
+            const sentPas = parseFloat(pasAmount);
+            const tolerance = 0.000001;
+            if (Math.abs(expectedPas - sentPas) > tolerance) {
+                console.warn(`   ⚠️ PAS amount mismatch: expected ${expectedPas}, received ${sentPas}. Proceeding to credit based on principal.`);
+            }
+            const principalInr = parseFloat(payback.from_amount || 0);
+            const paybackFeePercent = (CONFIG.PAYBACK_FEE_PERCENT || 0);
+            const inrFromPrincipal = principalInr * (1 - paybackFeePercent);
+            console.log(`   📋 Using principal-based INR: ₹${principalInr} → after fee: ₹${inrFromPrincipal.toFixed(2)}`);
+            inrToCredit = inrFromPrincipal;
+        }
         
         console.log(`   📈 Rate: 1 PAS = ₹${rates.pasToInr.toFixed(2)}`);
         console.log(`   💰 INR to credit: ₹${inrToCredit.toFixed(2)}`);
@@ -1043,15 +1092,6 @@ app.post('/api/payback-completed', async (req, res) => {
         console.log('   ✅ Wallet balance updated');
         
         // 4. Update payback record if exists
-        const { data: payback } = await supabase
-            .from('crypto_purchases')
-            .select('id')
-            .eq('destination_address', normalizedAddress)
-            .eq('status', 'pending_payback')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .single();
-        
         if (payback) {
             await supabase
                 .from('crypto_purchases')
@@ -1261,44 +1301,27 @@ app.post('/api/borrow-pas', async (req, res) => {
         console.log(`   ✅ XLM locked successfully!`);
         console.log(`   🔗 TX Hash: ${lockResult.txHash}`);
         
-        // 6. Create loan record in database
+        // 6. Create loan record in database (using lending_loans table)
         console.log(`\n   📝 Step 2: Recording loan in database...`);
         
         const { data: loan, error: insertError } = await supabase
-            .from('crypto_purchases')
+            .from('lending_loans')
             .insert({
                 user_id: normalizedAddress,
-                from_amount: collateralInr,
-                to_token: 'PAS',
-                to_amount: pasAmount,
-                exchange_rate: pasRates.pasToInr,
-                destination_address: evmAddress,
-                xlm_locked: collateralXlm,
-                
-                // Lending-specific fields
                 collateral_xlm: collateralXlm,
                 collateral_value_inr: collateralInr,
                 borrowed_pas: pasAmount,
                 borrowed_value_inr: borrowAmountInr,
-                ltv_at_creation: userLtv,
+                ltv_ratio: userLtv,
                 interest_rate_apy: interestRate,
-                interest_accrued: 0,
-                last_interest_update: loanStartDate.toISOString(),
-                health_factor: healthFactor,
-                liquidation_threshold: LENDING_CONFIG.LTV.LIQUIDATION_THRESHOLD,
-                liquidation_price_xlm: liquidationPrice,
-                loan_start_date: loanStartDate.toISOString(),
-                repayment_deadline: repaymentDeadline.toISOString(),
-                grace_period_ends: gracePeriodEnds.toISOString(),
-                late_fee: 0,
-                liquidation_penalty: LENDING_CONFIG.LIQUIDATION.PENALTY,
                 loan_type: loanType,
                 loan_duration_days: duration,
-                is_liquidated: false,
-                
-                status: 'active',
-                stellar_tx_hash: lockResult.txHash,
-                slippage_tolerance: 1
+                health_factor: healthFactor,
+                liquidation_price: liquidationPrice,
+                loan_start_date: loanStartDate.toISOString(),
+                repayment_deadline: repaymentDeadline.toISOString(),
+                stellar_lock_tx_hash: lockResult.txHash,
+                status: 'active'
             })
             .select()
             .single();
@@ -1434,12 +1457,7 @@ app.get('/api/loan/:loanId', async (req, res) => {
     const { loanId } = req.params;
     
     try {
-        // Fetch loan from database
-        const { data: loan, error } = await supabase
-            .from('crypto_purchases')
-            .select('*')
-            .eq('id', loanId)
-            .single();
+        // Fetch loan from lending_loans table\n        const { data: loan, error } = await supabase\n            .from('lending_loans')\n            .select('*')\n            .eq('id', loanId)\n            .single();
         
         if (error || !loan) {
             return res.status(404).json({
@@ -1557,12 +1575,12 @@ app.get('/api/loans/:userId', async (req, res) => {
     const normalizedAddress = userId.toLowerCase();
     
     try {
-        // Fetch all loans for user
+        // Fetch all active loans for user from lending_loans table
         const { data: loans, error } = await supabase
-            .from('crypto_purchases')
+            .from('lending_loans')
             .select('*')
             .eq('user_id', normalizedAddress)
-            .in('status', ['active', 'locked', 'overdue', 'pending'])
+            .eq('status', 'active')
             .order('created_at', { ascending: false });
         
         if (error) throw error;
@@ -1617,6 +1635,29 @@ app.get('/api/loans/:userId', async (req, res) => {
             }
         });
         
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Get active loan summary (counts and total collateral/borrowed) from active_loans view
+ */
+app.get('/api/loans/:userId/summary', async (req, res) => {
+    const { userId } = req.params;
+    const normalizedAddress = userId.toLowerCase();
+    try {
+        const { data, error } = await supabase
+            .from('active_loans')
+            .select('*')
+            .eq('user_id', normalizedAddress)
+            .single();
+        if (error) throw error;
+        // If no active loans, return zeros
+        if (!data) {
+            return res.json({ success: true, summary: { loan_count: 0, total_collateral_xlm: 0, total_borrowed_pas: 0, total_borrowed_inr: 0 } });
+        }
+        res.json({ success: true, summary: data });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1743,6 +1784,322 @@ app.post('/api/lending/preview', async (req, res) => {
         });
         
     } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Repay a loan
+ * User sends PAS tokens back to repay loan, collateral XLM is released
+ * Flow: User sends PAS to pool → Backend verifies → Loan marked repaid → Collateral released
+ */
+app.post('/api/lending/repay', async (req, res) => {
+    const { userId, loanId, txHash } = req.body;
+    
+    if (!userId || !loanId) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields: userId, loanId'
+        });
+    }
+    
+    const normalizedAddress = userId.toLowerCase();
+    
+    try {
+        console.log('\n💰 ═══════════════════════════════════════════════════════════════');
+        console.log('   🏦 LOAN REPAYMENT REQUEST (PAS)');
+        console.log('═══════════════════════════════════════════════════════════════════');
+        console.log(`   📋 User: ${normalizedAddress}`);
+        console.log(`   📋 Loan ID: ${loanId}`);
+        if (txHash) console.log(`   📋 TX Hash: ${txHash}`);
+        
+        // 1. Fetch the loan from lending_loans table
+        const { data: loan, error: loanError } = await supabase
+            .from('lending_loans')
+            .select('*')
+            .eq('id', loanId)
+            .eq('user_id', normalizedAddress)
+            .single();
+        
+        if (loanError || !loan) {
+            return res.status(404).json({
+                success: false,
+                error: 'Loan not found'
+            });
+        }
+        
+        if (loan.status === 'repaid' || loan.status === 'liquidated') {
+            return res.status(400).json({
+                success: false,
+                error: `Loan already ${loan.status}`
+            });
+        }
+        
+        // 2. Calculate total debt in PAS
+        const xlmPrice = await getXlmPrice();
+        const pasRates = await getPasToInrRate();
+        const daysElapsed = daysBetween(loan.loan_start_date || loan.created_at, new Date());
+        const daysUntilDeadline = daysBetween(new Date(), loan.repayment_deadline || loan.created_at);
+        
+        // Calculate interest and fees in INR first
+        const principalInr = loan.borrowed_value_inr || loan.from_amount;
+        const interest = calculateAccruedInterest(
+            principalInr,
+            loan.interest_rate_apy || 0.08,
+            daysElapsed
+        );
+        
+        const daysOverdue = Math.max(0, -daysUntilDeadline);
+        const lateFee = calculateLateFee(
+            principalInr + interest.interestAccrued,
+            daysOverdue
+        );
+        
+        const totalDebtInr = principalInr + interest.interestAccrued + lateFee;
+        
+        // Convert to PAS
+        const principalPas = loan.borrowed_pas || (principalInr / pasRates.pasToInr);
+        const interestPas = interest.interestAccrued / pasRates.pasToInr;
+        const lateFeePas = lateFee / pasRates.pasToInr;
+        const totalDebtPas = totalDebtInr / pasRates.pasToInr;
+        
+        console.log(`   📊 Principal: ${principalPas.toFixed(4)} PAS (₹${principalInr.toFixed(2)})`);
+        console.log(`   📊 Interest: ${interestPas.toFixed(4)} PAS (₹${interest.interestAccrued.toFixed(2)})`);
+        console.log(`   📊 Late Fee: ${lateFeePas.toFixed(4)} PAS (₹${lateFee.toFixed(2)})`);
+        console.log(`   📊 Total Due: ${totalDebtPas.toFixed(4)} PAS (₹${totalDebtInr.toFixed(2)})`);
+        
+        // 3. Return repayment info for frontend to execute transfer
+        // The frontend will send PAS to the pool, then call back with txHash
+        if (!txHash) {
+            // First call - return amount needed
+            return res.json({
+                success: true,
+                action: 'send_pas',
+                repaymentDetails: {
+                    poolAddress: CONFIG.EVM_POOL_ADDRESS,
+                    principalPas,
+                    interestPas,
+                    lateFeePas,
+                    totalPas: totalDebtPas,
+                    totalInr: totalDebtInr,
+                    pasPrice: pasRates.pasToInr
+                },
+                loan: {
+                    id: loanId,
+                    collateralXlm: loan.collateral_xlm,
+                    collateralValueInr: loan.collateral_xlm * xlmPrice
+                }
+            });
+        }
+        
+        // 4. Second call - verify transaction and mark loan as repaid
+        console.log(`   🔍 Verifying PAS transfer...`);
+        console.log(`   📋 TX Hash: ${txHash}`);
+        
+        // TODO: Verify the transaction on-chain (for now, trust the txHash)
+        // In production, verify that:
+        // - Transaction exists and is confirmed
+        // - Amount sent >= totalDebtPas
+        // - Recipient is the pool address
+        
+        // 5. Update loan status in lending_loans table
+        const { error: updateError } = await supabase
+            .from('lending_loans')
+            .update({
+                status: 'repaid',
+                repaid_at: new Date().toISOString(),
+                repaid_pas: totalDebtPas,
+                repaid_value_inr: totalDebtInr,
+                interest_paid: interest.interestAccrued,
+                late_fee_paid: lateFee,
+                repay_tx_hash: txHash
+            })
+            .eq('id', loanId);
+        
+        if (updateError) {
+            console.error(`   ❌ Failed to update loan status:`, updateError);
+            throw new Error('Failed to update loan status');
+        }
+        
+        console.log(`   ✅ Loan marked as REPAID`);
+        
+        // 6. Get collateral info
+        const collateralXlm = loan.collateral_xlm || 0;
+        // Use original collateral value (what user put in), not current market value
+        const collateralValueToReturn = loan.collateral_value_inr || (collateralXlm * xlmPrice);
+        
+        // 7. Credit collateral value back to user's wallet
+        console.log(`   💰 Crediting collateral back to wallet...`);
+        
+        const { data: wallet, error: walletFetchError } = await supabase
+            .from('wallets')
+            .select('balance_inr')
+            .eq('wallet_address', normalizedAddress)
+            .single();
+        
+        if (walletFetchError) {
+            console.error(`   ⚠️ Could not fetch wallet for collateral credit:`, walletFetchError.message);
+        } else {
+            const currentBalance = parseFloat(wallet.balance_inr) || 0;
+            const newBalance = currentBalance + collateralValueToReturn;
+            
+            const { error: walletUpdateError } = await supabase
+                .from('wallets')
+                .update({
+                    balance_inr: newBalance,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('wallet_address', normalizedAddress);
+            
+            if (walletUpdateError) {
+                console.error(`   ⚠️ Failed to credit collateral to wallet:`, walletUpdateError.message);
+            } else {
+                console.log(`   ✅ Collateral credited: ₹${collateralValueToReturn.toFixed(2)} (${currentBalance.toFixed(2)} → ${newBalance.toFixed(2)})`);
+            }
+        }
+        
+        console.log('\n═══════════════════════════════════════════════════════════════════');
+        console.log('   ✅ LOAN REPAID SUCCESSFULLY!');
+        console.log('═══════════════════════════════════════════════════════════════════');
+        console.log(`   🔓 Collateral Released: ${collateralXlm.toFixed(4)} XLM (₹${collateralValueToReturn.toFixed(2)})`);
+        console.log(`   💰 Total Paid: ${totalDebtPas.toFixed(4)} PAS (₹${totalDebtInr.toFixed(2)})`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
+        res.json({
+            success: true,
+            message: 'Loan repaid successfully',
+            repayment: {
+                principalPas,
+                interestPas,
+                lateFeePas,
+                totalPaidPas: totalDebtPas,
+                totalPaidInr: totalDebtInr,
+                txHash
+            },
+            collateral: {
+                xlm: collateralXlm,
+                valueInr: collateralValueToReturn,
+                message: 'Your XLM collateral value has been credited back to your wallet.'
+            }
+        });
+        
+    } catch (error) {
+        console.error('   ❌ Repayment error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Add more collateral to an existing loan
+ * Improves health factor and reduces liquidation risk
+ */
+app.post('/api/lending/add-collateral', async (req, res) => {
+    const { userId, loanId, additionalXlm } = req.body;
+    
+    if (!userId || !loanId || !additionalXlm) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields: userId, loanId, additionalXlm'
+        });
+    }
+    
+    const normalizedAddress = userId.toLowerCase();
+    
+    try {
+        console.log('\n📈 ═══════════════════════════════════════════════════════════════');
+        console.log('   🏦 ADD COLLATERAL REQUEST');
+        console.log('═══════════════════════════════════════════════════════════════════');
+        console.log(`   📋 User: ${normalizedAddress}`);
+        console.log(`   📋 Loan ID: ${loanId}`);
+        console.log(`   📋 Additional XLM: ${additionalXlm}`);
+        
+        // 1. Fetch the loan from lending_loans table
+        const { data: loan, error: loanError } = await supabase
+            .from('lending_loans')
+            .select('*')
+            .eq('id', loanId)
+            .eq('user_id', normalizedAddress)
+            .single();
+        
+        if (loanError || !loan) {
+            return res.status(404).json({
+                success: false,
+                error: 'Loan not found'
+            });
+        }
+        
+        if (loan.status === 'repaid' || loan.status === 'liquidated') {
+            return res.status(400).json({
+                success: false,
+                error: `Cannot add collateral to ${loan.status} loan`
+            });
+        }
+        
+        // 2. Calculate new collateral and health factor
+        const xlmPrice = await getXlmPrice();
+        const currentCollateral = loan.collateral_xlm || 0;
+        const newCollateral = currentCollateral + parseFloat(additionalXlm);
+        const newCollateralValue = newCollateral * xlmPrice;
+        
+        const daysElapsed = daysBetween(loan.loan_start_date || loan.created_at, new Date());
+        const interest = calculateAccruedInterest(
+            loan.borrowed_value_inr || loan.from_amount,
+            loan.interest_rate_apy || 0.08,
+            daysElapsed
+        );
+        
+        const totalDebt = (loan.borrowed_value_inr || loan.from_amount) + interest.interestAccrued;
+        const oldHealthFactor = calculateHealthFactor(currentCollateral * xlmPrice, totalDebt);
+        const newHealthFactor = calculateHealthFactor(newCollateralValue, totalDebt);
+        const newLiquidationPrice = calculateLiquidationPrice(totalDebt, newCollateral);
+        
+        console.log(`   📊 Current Collateral: ${currentCollateral.toFixed(4)} XLM`);
+        console.log(`   📊 New Collateral: ${newCollateral.toFixed(4)} XLM`);
+        console.log(`   📊 Health Factor: ${oldHealthFactor.toFixed(2)} → ${newHealthFactor.toFixed(2)}`);
+        console.log(`   📊 New Liquidation Price: ₹${newLiquidationPrice.toFixed(2)}`);
+        
+        // 3. Update loan with new collateral in lending_loans table
+        const { error: updateError } = await supabase
+            .from('lending_loans')
+            .update({
+                collateral_xlm: newCollateral,
+                health_factor: newHealthFactor,
+                liquidation_price: newLiquidationPrice
+            })
+            .eq('id', loanId);
+        
+        if (updateError) {
+            console.error(`   ❌ Failed to update collateral:`, updateError);
+            throw new Error('Failed to update collateral');
+        }
+        
+        console.log('\n═══════════════════════════════════════════════════════════════════');
+        console.log('   ✅ COLLATERAL ADDED SUCCESSFULLY!');
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
+        res.json({
+            success: true,
+            message: 'Collateral added successfully',
+            loan: {
+                id: loanId,
+                collateral: {
+                    previous: currentCollateral,
+                    added: parseFloat(additionalXlm),
+                    new: newCollateral,
+                    valueInr: newCollateralValue
+                },
+                healthFactor: {
+                    previous: oldHealthFactor,
+                    new: newHealthFactor,
+                    improvement: newHealthFactor - oldHealthFactor
+                },
+                liquidationPrice: newLiquidationPrice,
+                xlmPrice
+            }
+        });
+        
+    } catch (error) {
+        console.error('   ❌ Add collateral error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

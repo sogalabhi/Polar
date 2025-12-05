@@ -557,7 +557,9 @@ export async function payBackStake(stakeId, walletAddress) {
     }
 
     const currentBalance = parseFloat(wallet.balance_inr) || 0;
-    const amountToReturn = parseFloat(stake.amount_inr);
+    // Default fee percent (frontend-side display only) - server will decide final fee
+    const PAYBACK_FEE_PERCENT = 0; // 0 = no fee
+    const amountToReturn = parseFloat(stake.amount_inr) * (1 - PAYBACK_FEE_PERCENT);
     const newBalance = currentBalance + amountToReturn;
 
     // Update wallet balance
