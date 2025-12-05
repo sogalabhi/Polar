@@ -1,0 +1,48 @@
+# ============================================
+# Node.js / Relayer
+# ============================================
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# ============================================
+# Rust / Soroban Contracts
+# ============================================
+target/
+Cargo.lock
+
+# ============================================
+# Environment & Secrets (NEVER COMMIT!)
+# ============================================
+.env
+*.env.local
+*.pem
+*.key
+
+# ============================================
+# IDE / Editor
+# ============================================
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ============================================
+# OS Files
+# ============================================
+.DS_Store
+Thumbs.db
+
+# ============================================
+# Relayer Runtime Files
+# ============================================
+relayer/src/processed_events.json
+
+# ============================================
+# Build Artifacts (keep WASM for reference)
+# ============================================
+# Uncomment if you don't want to commit compiled WASM:
+# contracts/soroban-vault/target/wasm32v1-none/
