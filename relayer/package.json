@@ -1,12 +1,12 @@
 {
   "name": "polar-bridge-relayer",
   "version": "1.0.0",
-  "main": "src/index.js",
+  "main": "src/routes.js",
   "scripts": {
-    "start": "node src/index.js",
-    "server": "node src/server.js",
-    "dev": "node --watch src/index.js",
-    "dev:server": "node --watch src/server.js",
+    "start": "node src/routes.js",
+    "relayer": "node src/index.js",
+    "dev": "node --watch src/routes.js",
+    "dev:relayer": "node --watch src/index.js",
     "test:balance": "node test/test-check-balance.js",
     "test:evm-pool": "node test/test-check-evm-pool.js",
     "test:watch": "node test/test-watch-events.js",

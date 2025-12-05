@@ -1,4 +1,10 @@
-const StatCard = ({ title, value, icon, subValue, trend }) => {
+const ShimmerLoader = () => (
+  <div className="animate-pulse">
+    <div className="h-8 bg-white/10 rounded-lg w-3/4"></div>
+  </div>
+);
+
+const StatCard = ({ title, value, icon, subValue, trend, isLoading = false }) => {
   return (
     <div className="bg-white/5 backdrop-blur-sm border border-white/10 p-6 rounded-2xl hover:border-green-500/30 transition-all duration-300 group">
       <div className="flex justify-between items-start mb-4">
@@ -9,7 +15,7 @@ const StatCard = ({ title, value, icon, subValue, trend }) => {
       </div>
       
       <div className="text-3xl font-bold text-white mb-2 tracking-tight">
-        {value}
+        {isLoading ? <ShimmerLoader /> : value}
       </div>
       
       {(subValue || trend) && (

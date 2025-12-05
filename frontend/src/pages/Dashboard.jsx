@@ -7,9 +7,6 @@ import NotificationModal from '../components/NotificationModal';
 import { useWallet } from '../hooks/useWallet';
 import { addFunds, createStake } from '../lib/supabase';
 
-// PAS/INR Exchange Rate (you can fetch this from an API)
-const PAS_INR_RATE = 85; // 1 PAS = ₹85
-
 const Dashboard = () => {
   const { Razorpay } = useRazorpay();
   const [isNotifOpen, setIsNotifOpen] = useState(false);
@@ -27,7 +24,9 @@ const Dashboard = () => {
     totalStakedPas,
     stakes,
     refresh,
-    isLoading 
+    isLoading,
+    realPasBalance,
+    pasInrRate 
   } = useWallet();
 
   const [notifications, setNotifications] = useState([
@@ -136,25 +135,58 @@ const Dashboard = () => {
       return;
     }
 
+    console.log('\n🚀 ═══════════════════════════════════════════════════════════════════');
+    console.log('   USER ACTION: Buy PAS Tokens (Stake INR)');
+    console.log('═══════════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Wallet Address: ${address}`);
+    console.log(`   💳 Amount INR: ₹${amountInr}`);
+    console.log(`   📈 Exchange Rate: 1 PAS = ₹${pasInrRate}`);
+    console.log(`   💰 Expected PAS: ${(amountInr / pasInrRate).toFixed(6)}`);
+    console.log(`   📊 Current Balance: ₹${balance.toFixed(2)}`);
+    console.log('═══════════════════════════════════════════════════════════════════════\n');
+
     setIsStaking(true);
     try {
-      const amountPas = amountInr / PAS_INR_RATE;
-      const result = await createStake(address, amountInr, amountPas, PAS_INR_RATE);
+      const amountPas = amountInr / pasInrRate;
+      console.log('   🔄 Calling createStake()...');
+      const result = await createStake(address, amountInr, amountPas, pasInrRate);
       
       if (result.success) {
+        console.log('\n   ═══════════════════════════════════════════════════════════════');
+        console.log('   ✅ STAKE SUCCESSFUL!');
+        console.log('   ═══════════════════════════════════════════════════════════════');
+        if (result.stellarTxHash) {
+          console.log(`   🔗 Stellar TX Hash: ${result.stellarTxHash}`);
+          console.log(`   🔗 Explorer: https://stellar.expert/explorer/testnet/tx/${result.stellarTxHash}`);
+        }
+        if (result.purchaseId) {
+          console.log(`   📋 Purchase ID: ${result.purchaseId}`);
+        }
+        console.log(`   💰 New Balance: ₹${result.newBalance}`);
+        if (result.warning) {
+          console.log(`   ⚠️  Warning: ${result.warning}`);
+        }
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
         setNotifications(prev => [{
           title: 'Stake Created!',
-          message: `Staked ₹${amountInr} for ${amountPas.toFixed(4)} PAS`,
+          message: `Staked ₹${amountInr} for ${amountPas.toFixed(4)} PAS${result.stellarTxHash ? ` (TX: ${result.stellarTxHash.slice(0, 8)}...)` : ''}`,
           time: 'Just now',
           type: 'success'
         }, ...prev]);
         setStakeAmount('');
         await refresh();
       } else {
+        console.error('\n   ❌ STAKE FAILED:', result.error);
+        console.error('═══════════════════════════════════════════════════════════════════\n');
         alert(result.error || 'Stake failed');
       }
     } catch (error) {
-      console.error('Stake error:', error);
+      console.error('\n   ═══════════════════════════════════════════════════════════════');
+      console.error('   ❌ STAKE ERROR');
+      console.error('   ═══════════════════════════════════════════════════════════════');
+      console.error(`   Error: ${error.message}`);
+      console.error('═══════════════════════════════════════════════════════════════════\n');
       alert('Failed to create stake');
     } finally {
       setIsStaking(false);
@@ -185,18 +217,26 @@ const Dashboard = () => {
                <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-purple-500 to-blue-400 flex items-center justify-center">
                  <span className="text-[10px] font-bold text-white">P</span>
                </div>
-               <span className="text-sm font-medium text-purple-300">
-                 {totalStakedPas.toFixed(2)} <span className="text-purple-400/70">PAS</span>
-               </span>
+               {isLoading ? (
+                 <div className="animate-pulse h-4 w-20 bg-purple-500/20 rounded"></div>
+               ) : (
+                 <span className="text-sm font-medium text-purple-300">
+                   {parseFloat(realPasBalance).toFixed(4)} <span className="text-purple-400/70">PAS</span>
+                 </span>
+               )}
              </div>
            )}
 
            {/* INR Balance Display */}
            {isConnected && (
              <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500/10 to-emerald-500/10 border border-green-500/30 rounded-xl">
-               <span className="text-sm font-medium text-green-300">
-                 ₹{balance.toFixed(2)}
-               </span>
+               {isLoading ? (
+                 <div className="animate-pulse h-4 w-16 bg-green-500/20 rounded"></div>
+               ) : (
+                 <span className="text-sm font-medium text-green-300">
+                   ₹{balance.toFixed(2)}
+                 </span>
+               )}
              </div>
            )}
 
@@ -249,24 +289,28 @@ const Dashboard = () => {
                 value={`₹ ${balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4 4a2 2 0 00-2 2v4a2 2 0 002 2V6h10a2 2 0 00-2-2H4zm2 6a2 2 0 012-2h8a2 2 0 012 2v4a2 2 0 01-2 2H8a2 2 0 01-2-2v-4zm6 4a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" /></svg>}
                 subValue="Wallet Balance"
+                isLoading={isLoading}
             />
             <StatCard 
                 title="Staked INR" 
                 value={`₹ ${totalStakedInr.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>}
                 subValue="Locked"
+                isLoading={isLoading}
             />
              <StatCard 
                 title="PAS Tokens" 
-                value={`${totalStakedPas.toFixed(4)} PAS`}
+                value={`${parseFloat(realPasBalance).toFixed(4)} PAS`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" /></svg>}
                 subValue="On Paseo Asset Hub"
+                isLoading={isLoading}
             />
             <StatCard 
                 title="Exchange Rate" 
-                value={`1 PAS = ₹${PAS_INR_RATE}`}
+                value={`1 PAS = ₹${pasInrRate}`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12 7a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0V8.414l-4.293 4.293a1 1 0 01-1.414 0L8 10.414l-4.293 4.293a1 1 0 01-1.414-1.414l5-5a1 1 0 011.414 0L11 10.586 14.586 7H12z" clipRule="evenodd" /></svg>}
                 subValue="Live"
+                isLoading={isLoading}
             />
         </div>
 
@@ -306,7 +350,7 @@ const Dashboard = () => {
                 <h3 className="text-xl font-bold mb-4">Buy PAS Tokens</h3>
                 <p className="text-gray-400 text-sm mb-4">
                    Convert your INR balance to PAS tokens on Paseo Asset Hub.
-                   <span className="text-purple-400 font-bold ml-1">1 PAS = ₹{PAS_INR_RATE}</span>
+                   <span className="text-purple-400 font-bold ml-1">1 PAS = ₹{pasInrRate}</span>
                 </p>
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
@@ -320,7 +364,7 @@ const Dashboard = () => {
                   </div>
                   {stakeAmount && parseFloat(stakeAmount) > 0 && (
                     <p className="text-sm text-gray-400">
-                      You'll receive: <span className="text-purple-400 font-bold">{(parseFloat(stakeAmount) / PAS_INR_RATE).toFixed(4)} PAS</span>
+                      You'll receive: <span className="text-purple-400 font-bold">{(parseFloat(stakeAmount) / pasInrRate).toFixed(4)} PAS</span>
                     </p>
                   )}
                 </div>

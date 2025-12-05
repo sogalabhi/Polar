@@ -4,11 +4,31 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+console.log('🔧 Supabase Config:');
+console.log('   URL:', supabaseUrl ? `${supabaseUrl.substring(0, 30)}...` : '❌ MISSING!');
+console.log('   Key:', supabaseAnonKey ? `${supabaseAnonKey.substring(0, 20)}...` : '❌ MISSING!');
+
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('Missing Supabase environment variables!');
+  console.error('❌ Missing Supabase environment variables!');
+  console.error('   Make sure you have VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '');
+
+// Test Supabase connection on load
+(async () => {
+  try {
+    const { data, error } = await supabase.from('wallets').select('count').limit(1);
+    if (error) {
+      console.error('❌ Supabase connection test FAILED:', error.message);
+      console.error('   Full error:', error);
+    } else {
+      console.log('✅ Supabase connection test PASSED');
+    }
+  } catch (e) {
+    console.error('❌ Supabase connection test EXCEPTION:', e.message);
+  }
+})();
 
 // ============================================
 // PHASE 1: User Onboarding
@@ -21,28 +41,36 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
  * @returns {Promise<{success: boolean, wallet: object, isNew: boolean}>}
  */
 export async function checkOrCreateUser(walletAddress) {
+  console.log('🔍 checkOrCreateUser called with:', walletAddress);
+  
   if (!walletAddress) {
+    console.error('❌ checkOrCreateUser: No wallet address provided');
     return { success: false, error: 'Wallet address is required' };
   }
 
   const normalizedAddress = walletAddress.toLowerCase();
+  console.log('   Normalized address:', normalizedAddress);
 
   try {
     // Check if user already exists
+    console.log('   Querying Supabase for existing user...');
     const { data: existingWallet, error: fetchError } = await supabase
       .from('wallets')
       .select('*')
       .eq('wallet_address', normalizedAddress)
       .single();
 
+    console.log('   Query result - data:', existingWallet, 'error:', fetchError);
+
     if (fetchError && fetchError.code !== 'PGRST116') {
       // PGRST116 = no rows returned (user doesn't exist)
+      console.error('❌ Supabase fetch error:', fetchError);
       throw fetchError;
     }
 
     if (existingWallet) {
       // User exists, return their wallet
-      console.log('✅ User found:', normalizedAddress);
+      console.log('✅ User found in Supabase:', existingWallet);
       return {
         success: true,
         wallet: existingWallet,
@@ -51,6 +79,7 @@ export async function checkOrCreateUser(walletAddress) {
     }
 
     // User doesn't exist, create new wallet record
+    console.log('   User not found, creating new wallet...');
     const { data: newWallet, error: insertError } = await supabase
       .from('wallets')
       .insert({
@@ -60,18 +89,23 @@ export async function checkOrCreateUser(walletAddress) {
       .select()
       .single();
 
+    console.log('   Insert result - data:', newWallet, 'error:', insertError);
+
     if (insertError) {
+      console.error('❌ Supabase insert error:', insertError);
       throw insertError;
     }
 
-    console.log('✅ New user created:', normalizedAddress);
+    console.log('✅ New user created in Supabase:', newWallet);
     return {
       success: true,
       wallet: newWallet,
       isNew: true,
     };
   } catch (error) {
-    console.error('❌ Error in checkOrCreateUser:', error.message);
+    console.error('❌ Error in checkOrCreateUser:', error);
+    console.error('   Error message:', error.message);
+    console.error('   Error details:', JSON.stringify(error, null, 2));
     return {
       success: false,
       error: error.message,
@@ -127,7 +161,10 @@ export async function getWalletBalance(walletAddress) {
  * @returns {Promise<{success: boolean, newBalance: number}>}
  */
 export async function addFunds(walletAddress, amount) {
+  console.log('💰 addFunds called:', { walletAddress, amount });
+  
   if (!walletAddress || !amount || amount <= 0) {
+    console.error('❌ addFunds: Invalid parameters');
     return { success: false, error: 'Invalid wallet address or amount' };
   }
 
@@ -135,18 +172,23 @@ export async function addFunds(walletAddress, amount) {
 
   try {
     // Get current balance
+    console.log('   Fetching current balance...');
     const { data: wallet, error: fetchError } = await supabase
       .from('wallets')
       .select('balance_inr')
       .eq('wallet_address', normalizedAddress)
       .single();
 
+    console.log('   Current wallet:', wallet, 'error:', fetchError);
+
     if (fetchError) {
+      console.error('❌ addFunds fetch error:', fetchError);
       throw fetchError;
     }
 
     const currentBalance = parseFloat(wallet.balance_inr) || 0;
     const newBalance = currentBalance + amount;
+    console.log(`   Updating balance: ₹${currentBalance} + ₹${amount} = ₹${newBalance}`);
 
     // Update balance
     const { data, error: updateError } = await supabase
@@ -159,7 +201,10 @@ export async function addFunds(walletAddress, amount) {
       .select()
       .single();
 
+    console.log('   Update result:', data, 'error:', updateError);
+
     if (updateError) {
+      console.error('❌ addFunds update error:', updateError);
       throw updateError;
     }
 
@@ -170,7 +215,8 @@ export async function addFunds(walletAddress, amount) {
       wallet: data,
     };
   } catch (error) {
-    console.error('❌ Error in addFunds:', error.message);
+    console.error('❌ Error in addFunds:', error);
+    console.error('   Full error:', JSON.stringify(error, null, 2));
     return {
       success: false,
       error: error.message,
@@ -183,89 +229,100 @@ export async function addFunds(walletAddress, amount) {
 // ============================================
 
 /**
- * Create a new stake record and deduct from wallet balance
+ * Buy PAS tokens - calls backend API which handles blockchain first, then database
  * @param {string} walletAddress - User's EVM wallet address
  * @param {number} amountInr - Amount in INR to stake
  * @param {number} amountPas - PAS tokens to receive
  * @param {number} exchangeRate - Exchange rate at time of stake
- * @returns {Promise<{success: boolean, stake: object, newBalance: number}>}
+ * @returns {Promise<{success: boolean, stellarTxHash: string, error: string}>}
  */
 export async function createStake(walletAddress, amountInr, amountPas, exchangeRate) {
+  console.log('\n🚀 ═══════════════════════════════════════════════════════════════');
+  console.log('   💎 WEB3 ACTION: Buy PAS Tokens (Blockchain-First)');
+  console.log('═══════════════════════════════════════════════════════════════════');
+  console.log(`   📋 Wallet: ${walletAddress}`);
+  console.log(`   💳 Amount INR: ₹${amountInr}`);
+  console.log(`   💰 Expected PAS: ${amountPas}`);
+  console.log(`   📈 Exchange Rate: ₹${exchangeRate}/PAS`);
+  
   if (!walletAddress || !amountInr || amountInr <= 0) {
+    console.error('   ❌ Invalid parameters');
+    console.error('═══════════════════════════════════════════════════════════════════\n');
     return { success: false, error: 'Invalid parameters' };
   }
 
   const normalizedAddress = walletAddress.toLowerCase();
 
   try {
-    // Get current balance
-    const { data: wallet, error: fetchError } = await supabase
-      .from('wallets')
-      .select('balance_inr')
-      .eq('wallet_address', normalizedAddress)
-      .single();
-
-    if (fetchError) {
-      throw fetchError;
-    }
-
-    const currentBalance = parseFloat(wallet.balance_inr) || 0;
-
-    if (currentBalance < amountInr) {
+    // Call the buy-pas API - it handles blockchain TX first, then database
+    console.log('\n   🔗 Calling buy-pas API...');
+    console.log('   This will:');
+    console.log('   1. Execute blockchain transaction (lock XLM on Stellar)');
+    console.log('   2. Only if successful, update database');
+    
+    const response = await fetch('http://localhost:3000/api/buy-pas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: normalizedAddress,
+        pasAmount: amountPas,
+        evmAddress: walletAddress,
+        slippageTolerance: 1
+      })
+    });
+    
+    const apiResult = await response.json();
+    
+    if (apiResult.success) {
+      console.log('\n   ═══════════════════════════════════════════════════════════════');
+      console.log('   ✅ PURCHASE SUCCESSFUL!');
+      console.log('   ═══════════════════════════════════════════════════════════════');
+      console.log(`   🔗 Stellar TX Hash: ${apiResult.data.stellarTxHash}`);
+      console.log(`   🔗 Explorer: ${apiResult.data.stellarExplorer || `https://stellar.expert/explorer/testnet/tx/${apiResult.data.stellarTxHash}`}`);
+      console.log(`   📊 Status: ${apiResult.data.status}`);
+      console.log(`   💰 PAS Amount: ${apiResult.data.pasAmount}`);
+      console.log(`   💳 INR Spent: ₹${apiResult.data.inrSpent}`);
+      console.log(`   💵 New Balance: ₹${apiResult.data.newWalletBalance}`);
+      console.log('   ⏳ Waiting for relayer to send PAS to your wallet...');
+      console.log('═══════════════════════════════════════════════════════════════════\n');
+      
+      return {
+        success: true,
+        stellarTxHash: apiResult.data.stellarTxHash,
+        stellarExplorer: apiResult.data.stellarExplorer,
+        purchaseId: apiResult.data.purchaseId,
+        newBalance: apiResult.data.newWalletBalance,
+        pasAmount: apiResult.data.pasAmount,
+        inrSpent: apiResult.data.inrSpent,
+      };
+    } else {
+      // API returned an error - could be blockchain failure or other issue
+      console.error('\n   ═══════════════════════════════════════════════════════════════');
+      console.error('   ❌ PURCHASE FAILED');
+      console.error('   ═══════════════════════════════════════════════════════════════');
+      console.error(`   Error: ${apiResult.error}`);
+      if (apiResult.details) {
+        console.error(`   Stage: ${apiResult.details.stage}`);
+        console.error(`   Details: ${apiResult.details.message}`);
+      }
+      console.error('═══════════════════════════════════════════════════════════════════\n');
+      
       return {
         success: false,
-        error: `Insufficient balance. Have ₹${currentBalance}, need ₹${amountInr}`,
+        error: apiResult.error,
+        details: apiResult.details,
       };
     }
-
-    // Deduct from wallet
-    const newBalance = currentBalance - amountInr;
-
-    const { error: updateError } = await supabase
-      .from('wallets')
-      .update({
-        balance_inr: newBalance,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('wallet_address', normalizedAddress);
-
-    if (updateError) {
-      throw updateError;
-    }
-
-    // Create stake record
-    const { data: stake, error: insertError } = await supabase
-      .from('stakes')
-      .insert({
-        wallet_address: normalizedAddress,
-        amount_inr: amountInr,
-        amount_pas: amountPas,
-        exchange_rate: exchangeRate,
-        status: 'pending',
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      // Rollback wallet balance on error
-      await supabase
-        .from('wallets')
-        .update({ balance_inr: currentBalance })
-        .eq('wallet_address', normalizedAddress);
-      throw insertError;
-    }
-
-    console.log(`✅ Stake created: ₹${amountInr} for ${amountPas} PAS`);
-    return {
-      success: true,
-      stake: stake,
-      newBalance: newBalance,
-    };
   } catch (error) {
-    console.error('❌ Error in createStake:', error.message);
+    console.error('\n   ═══════════════════════════════════════════════════════════════');
+    console.error('   ❌ NETWORK/API ERROR');
+    console.error('   ═══════════════════════════════════════════════════════════════');
+    console.error(`   Error: ${error.message}`);
+    console.error('   Make sure the backend server is running on http://localhost:3000');
+    console.error('═══════════════════════════════════════════════════════════════════\n');
     return {
       success: false,
-      error: error.message,
+      error: `API connection failed: ${error.message}`,
     };
   }
 }
@@ -489,6 +546,7 @@ export async function getTotalStaked(walletAddress) {
  * @returns {Promise<object>} - All user data for dashboard
  */
 export async function getDashboardData(walletAddress) {
+console.log('🔍 Fetching dashboard data for:', walletAddress);
   const normalizedAddress = walletAddress.toLowerCase();
 
   try {
@@ -497,7 +555,7 @@ export async function getDashboardData(walletAddress) {
       getStakeHistory(normalizedAddress),
       getTotalStaked(normalizedAddress),
     ]);
-
+    console.log('✅ Dashboard data fetched successfully');
     return {
       success: true,
       balance: balanceResult.balance || 0,

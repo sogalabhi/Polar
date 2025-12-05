@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { checkOrCreateUser, getDashboardData } from '../lib/supabase';
 
+const API_BASE = 'http://localhost:3000';
+
 /**
  * Custom hook for managing wallet connection and user data
  * Integrates MetaMask with Supabase user management
@@ -11,15 +13,70 @@ export function useWallet() {
   const [error, setError] = useState(null);
   const [userData, setUserData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [realPasBalance, setRealPasBalance] = useState('0');
+  const [pasInrRate, setPasInrRate] = useState(200); // Default rate
 
   // Check if MetaMask is installed
   const isMetaMaskInstalled = typeof window !== 'undefined' && !!window.ethereum;
+
+  // Fetch real PAS balance from blockchain
+  const fetchRealPasBalance = useCallback(async (walletAddress) => {
+    if (!walletAddress) return;
+    
+    console.log('\n📡 ═══════════════════════════════════════════════════════════════');
+    console.log('   💰 WEB3 CALL: Fetching PAS Balance from Blockchain');
+    console.log('═══════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Wallet: ${walletAddress}`);
+    console.log(`   📋 Network: Paseo Asset Hub`);
+    console.log(`   📋 API: ${API_BASE}/api/pas-balance/${walletAddress}`);
+    
+    try {
+      console.log('\n   🔍 Querying balance...');
+      const response = await fetch(`${API_BASE}/api/pas-balance/${walletAddress}`);
+      const data = await response.json();
+      
+      if (data.success) {
+        setRealPasBalance(data.balance);
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   ✅ BALANCE RETRIEVED');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   💰 Balance: ${data.balance} PAS`);
+        console.log(`   💰 Value: ${data.valueInrFormatted || 'N/A'}`);
+        console.log(`   📋 Network: ${data.network}`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+      } else {
+        console.error('\n   ❌ Failed to fetch PAS balance:', data.error);
+        console.error('═══════════════════════════════════════════════════════════════════\n');
+      }
+    } catch (err) {
+      console.error('\n   ═══════════════════════════════════════════════════════════');
+      console.error('   ❌ BALANCE FETCH ERROR');
+      console.error('   ═══════════════════════════════════════════════════════════');
+      console.error(`   Error: ${err.message}`);
+      console.error('═══════════════════════════════════════════════════════════════════\n');
+    }
+  }, []);
+
+  // Fetch exchange rate from backend (calls CoinGecko)
+  const fetchExchangeRate = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/rates`);
+      const data = await response.json();
+      
+      if (data.success && data.rates) {
+        setPasInrRate(data.rates.pasToInr);
+        console.log('📈 PAS/INR Rate:', data.rates.pasToInr);
+        console.log('   (1 PAS = $' + data.rates.pasToUsdc + ' USDC, 1 USDC = ₹' + data.rates.usdcToInr + ')');
+      }
+    } catch (err) {
+      console.error('Error fetching exchange rate:', err);
+    }
+  }, []);
 
   // Load user data from Supabase
   const loadUserData = useCallback(async (walletAddress) => {
     if (!walletAddress) return;
     
-    setIsLoading(true);
     try {
       const result = await getDashboardData(walletAddress);
       if (result.success) {
@@ -34,10 +91,27 @@ export function useWallet() {
       }
     } catch (err) {
       console.error('Error loading user data:', err);
+    }
+  }, []);
+
+  // Load all data (Supabase + blockchain) with loading state
+  const loadAllData = useCallback(async (walletAddress) => {
+    if (!walletAddress) return;
+    
+    setIsLoading(true);
+    try {
+      // Fetch all data in parallel
+      await Promise.all([
+        loadUserData(walletAddress),
+        fetchRealPasBalance(walletAddress),
+        fetchExchangeRate(),
+      ]);
+    } catch (err) {
+      console.error('Error loading data:', err);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [loadUserData, fetchRealPasBalance, fetchExchangeRate]);
 
   // Connect wallet function
   const connect = useCallback(async () => {
@@ -68,8 +142,8 @@ export function useWallet() {
       
       if (result.success) {
         console.log(result.isNew ? '🆕 New user created!' : '👋 Welcome back!');
-        // Load full user data
-        await loadUserData(walletAddress);
+        // Load all data (Supabase + blockchain)
+        await loadAllData(walletAddress);
       } else {
         console.error('Failed to register user:', result.error);
         setError('Failed to register wallet. Please try again.');
@@ -84,21 +158,22 @@ export function useWallet() {
     } finally {
       setIsConnecting(false);
     }
-  }, [isMetaMaskInstalled, loadUserData]);
+  }, [isMetaMaskInstalled, loadAllData]);
 
   // Disconnect wallet function
   const disconnect = useCallback(() => {
     setAddress(null);
     setUserData(null);
+    setRealPasBalance('0');
     setError(null);
   }, []);
 
   // Refresh user data
   const refresh = useCallback(async () => {
     if (address) {
-      await loadUserData(address);
+      await loadAllData(address);
     }
-  }, [address, loadUserData]);
+  }, [address, loadAllData]);
 
   // Listen for account changes
   useEffect(() => {
@@ -116,7 +191,7 @@ export function useWallet() {
         // Register new wallet and load data
         const result = await checkOrCreateUser(newAddress);
         if (result.success) {
-          await loadUserData(newAddress);
+          await loadAllData(newAddress);
         }
       }
     };
@@ -133,7 +208,7 @@ export function useWallet() {
       window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
       window.ethereum.removeListener('chainChanged', handleChainChanged);
     };
-  }, [isMetaMaskInstalled, address, disconnect, loadUserData]);
+  }, [isMetaMaskInstalled, address, disconnect, loadAllData]);
 
   // Check for existing connection on mount
   useEffect(() => {
@@ -151,7 +226,7 @@ export function useWallet() {
           
           // Load user data for existing connection
           await checkOrCreateUser(walletAddress);
-          await loadUserData(walletAddress);
+          await loadAllData(walletAddress);
         }
       } catch (err) {
         console.error('Error checking existing connection:', err);
@@ -159,7 +234,7 @@ export function useWallet() {
     };
 
     checkExistingConnection();
-  }, [isMetaMaskInstalled, loadUserData]);
+  }, [isMetaMaskInstalled, loadAllData]);
 
   return {
     // Wallet state
@@ -177,10 +252,15 @@ export function useWallet() {
     totalStakedInr: userData?.totalStakedInr || 0,
     totalStakedPas: userData?.totalStakedPas || 0,
     
+    // Real blockchain data
+    realPasBalance,
+    pasInrRate,
+    
     // Actions
     connect,
     disconnect,
     refresh,
+    fetchRealPasBalance,
   };
 }
 

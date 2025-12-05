@@ -2,10 +2,22 @@
 
 ## 📋 Project Overview
 
-**Polar Bridge** is a cross-chain liquidity bridge enabling users to:
-1. Deposit INR via Razorpay → Receive crypto on Stellar/EVM
-2. Lock collateral on Stellar → Get liquidity on Paseo Asset Hub (EVM)
-3. Lock collateral on Paseo Asset Hub → Get liquidity on Stellar
+**Polar Bridge** is a custodial crypto exchange enabling Indian users to:
+1. Deposit INR via Razorpay → Buy PAS tokens on Paseo Asset Hub
+2. View real-time PAS balance from blockchain
+3. Track purchases and wallet balance via Supabase
+
+---
+
+## 📊 Overall Progress: ~85% Complete
+
+| Category | Progress | Status |
+|----------|----------|--------|
+| Smart Contracts | 100% | ✅ Complete |
+| Backend/API | 95% | ✅ Complete |
+| Frontend | 85% | ✅ Mostly Complete |
+| Database | 100% | ✅ Complete |
+| Bridge Logic | 70% | ⚠️ Needs E2E Testing |
 
 ---
 
@@ -49,14 +61,39 @@
 
 | Feature | Status |
 |---------|--------|
+| Express API Server | ✅ Running on port 3000 |
+| Razorpay Integration | ✅ Create order + Verify payment |
+| Supabase Integration | ✅ User wallets, stakes, purchases |
+| Real PAS Balance (ethers.js) | ✅ From Paseo Asset Hub |
+| Exchange Rates (CoinGecko) | ✅ DOT→INR (shown as PAS) |
 | Stellar Event Listener | ✅ Implemented |
 | EVM Event Listener (Polling) | ✅ Implemented |
-| Event Parsing | ✅ Implemented |
-| Processed Events Tracking | ✅ Implemented |
-| EVM Release (Stellar → EVM) | ✅ Implemented |
-| Stellar Release (EVM → Stellar) | ✅ Implemented |
+| Buy PAS Flow | ✅ INR → Lock XLM → Release PAS |
 | Bidirectional Bridge | ✅ Implemented |
-| **Razorpay Webhook** | ❌ Not Implemented |
+
+### Frontend (React + Vite)
+
+| Feature | Status |
+|---------|--------|
+| Landing Page | ✅ Complete |
+| Dashboard Page | ✅ Complete |
+| MetaMask Wallet Connection | ✅ Complete |
+| Real PAS Balance Display | ✅ From blockchain |
+| INR Wallet Balance | ✅ From Supabase |
+| Razorpay Payment | ✅ Add funds flow |
+| Buy PAS UI | ✅ Complete |
+| Exchange Rate Display | ✅ Real-time DOT/INR |
+| Loading Shimmer States | ✅ Complete |
+| Stakes History Table | ✅ Complete |
+| Notification Modal | ✅ Complete |
+
+### Database (Supabase)
+
+| Table | Status |
+|-------|--------|
+| wallets | ✅ wallet_address, balance_inr |
+| stakes | ✅ amount_inr, amount_pas, status |
+| crypto_purchases | ✅ Full purchase tracking |
 
 ---
 
@@ -64,30 +101,32 @@
 
 ### High Priority
 
-| Task | Description | Estimated Effort |
-|------|-------------|------------------|
-| 1. ~~Update Relayer for EVM~~ | ~~Add Paseo Asset Hub support~~ | ✅ Done |
-| 2. ~~Fund Both Pools~~ | ~~Deposit liquidity~~ | ✅ Done |
-| 3. ~~Create .env files~~ | ~~Add all secret keys~~ | ✅ Done |
-| 4. **Test End-to-End Bridge** | Lock XLM → Get PAS | 30 min |
-| 5. Razorpay Integration | Webhook handler, INR → Crypto | 2-3 hours |
+| Task | Description | Status |
+|------|-------------|--------|
+| 1. Update Relayer for EVM | Add Paseo Asset Hub support | ✅ Done |
+| 2. Fund Both Pools | Deposit liquidity | ✅ Done |
+| 3. Create .env files | Add all secret keys | ✅ Done |
+| 4. Razorpay Integration | Payment flow | ✅ Done |
+| 5. Frontend Dashboard | React UI | ✅ Done |
+| 6. Real PAS Balance | From blockchain | ✅ Done |
+| 7. Exchange Rates | CoinGecko API | ✅ Done |
+| 8. **Test End-to-End Bridge** | Lock XLM → Get PAS | ⚠️ Pending |
 
 ### Medium Priority
 
-| Task | Description | Estimated Effort |
-|------|-------------|------------------|
-| 6. Frontend Dashboard | React UI for deposits/withdrawals | 4-6 hours |
-| 7. Error Handling | Retry logic, crash recovery | 2 hours |
-| 8. Nonce/Replay Protection | Prevent double-spending | 1-2 hours |
+| Task | Description | Status |
+|------|-------------|--------|
+| Error Handling | Retry logic, crash recovery | ⚠️ Basic |
+| Nonce/Replay Protection | Prevent double-spending | ⚠️ Partial |
+| Production Deployment | Mainnet contracts | ❌ Not Started |
 
 ### Low Priority (Optional)
 
-| Task | Description |
-|------|-------------|
-| Deploy ink! Pool | Deploy to Substrate chain |
-| Price Oracle | Live XLM/PAS price feed |
-| Multi-token Support | Support multiple tokens |
-| Production Deployment | Mainnet contracts |
+| Task | Description | Status |
+|------|-------------|--------|
+| Deploy ink! Pool | Deploy to Substrate chain | ❌ Optional |
+| Multi-token Support | Support multiple tokens | ❌ Future |
+| Freighter Wallet | Stellar wallet integration | ❌ Future |
 
 ---
 
@@ -288,7 +327,8 @@ polar/
 │   ├── soroban-vault/           # ✅ Stellar Vault Contract
 │   │   ├── src/lib.rs           # ✅ Contract implementation
 │   │   ├── Cargo.toml           # ✅ Dependencies
-│   │   └── contract_id.txt      # ✅ Deployed addresses
+│   │   ├── contract_id.txt      # ✅ Deployed addresses
+│   │   └── .env.example         # ✅ 
 │   │
 │   ├── evm-pool/                # ✅ Paseo Asset Hub EVM Pool
 │   │   └── PolkaBridgePool.sol  # ✅ Deployed
@@ -297,20 +337,36 @@ polar/
 │   │   ├── lib.rs               # ✅ Compiled
 │   │   └── Cargo.toml           # ✅ 
 │   │
-│   └── .env.example             # ⚠️ Move to relayer/
+│   └── .env.example             # ✅
 │
 ├── relayer/
 │   ├── src/
-│   │   ├── index.js             # ⚠️ Needs EVM support
+│   │   ├── routes.js            # ✅ Main API server (port 3000)
+│   │   ├── index.js             # ✅ Event listeners
 │   │   └── check-balance.js     # ✅ Utility
+│   ├── test/                    # ✅ Test scripts
 │   ├── package.json             # ✅ Dependencies
-│   ├── .env                     # ❌ MISSING - Create this!
-│   └── .env.example             # ❌ MISSING - Create this!
+│   └── .env.example             # ✅
 │
-├── frontend/                    # ❌ NOT CREATED
-│   └── (React + Vite app)
+├── frontend/
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Landing.jsx      # ✅ Landing page
+│   │   │   └── Dashboard.jsx    # ✅ Main dashboard
+│   │   ├── components/
+│   │   │   ├── StatCard.jsx     # ✅ With loading shimmer
+│   │   │   ├── NotificationModal.jsx # ✅
+│   │   │   ├── InteractiveBackground.jsx # ✅
+│   │   │   └── BridgeAnimation.jsx # ✅
+│   │   ├── hooks/
+│   │   │   └── useWallet.js     # ✅ MetaMask + Supabase + API
+│   │   └── lib/
+│   │       └── supabase.js      # ✅ All Supabase functions
+│   ├── supabase-schema.sql      # ✅ Database schema
+│   ├── package.json             # ✅
+│   └── .env.example             # ✅
 │
-└── PROJECT_STATUS.md            # 📄 This file
+└── project_status.md            # 📄 This file
 ```
 
 ---
@@ -343,15 +399,41 @@ STELLAR_TOKEN=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 
 ---
 
+## 🚀 API Endpoints (port 3000)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/create-order` | POST | Create Razorpay order |
+| `/verify-payment` | POST | Verify Razorpay payment |
+| `/api/rates` | GET | Get PAS/INR exchange rate (from DOT) |
+| `/api/wallet/:userId` | GET | Get user's INR balance |
+| `/api/purchases/:userId` | GET | Get purchase history |
+| `/api/pas-balance/:address` | GET | Get real PAS balance from Paseo |
+| `/api/buy-pas` | POST | Buy PAS tokens with INR |
+| `/api/purchase-completed` | POST | Webhook for relayer |
+| `/api/test/add-balance` | POST | [TEST] Add INR to wallet |
+
+---
+
+## 🚀 Quick Start
+
+```bash
+# Start Backend
+cd relayer && npm start
+
+# Start Frontend (separate terminal)
+cd frontend && npm run dev
+```
+
+---
+
 ## 🚀 Next Steps (In Order)
 
-1. **Export Stellar Secret Key** from Freighter wallet
-2. **Export EVM Private Key** from MetaMask  
-3. **Create `/relayer/.env`** with real keys
-4. **Fund the pools** with test tokens
-5. **Update relayer** to support EVM ↔ Stellar
-6. **Test the bridge** end-to-end
-7. **Build frontend** (optional for demo)
+1. **Test Full Buy PAS Flow** - Add INR → Buy PAS → Check balance
+2. **Test Bridge** - Lock XLM on Stellar → Get PAS on Paseo
+3. **Add Error Handling** - Better error messages in UI
+4. **Production Deploy** - Deploy to mainnet (optional)
 
 ---
 

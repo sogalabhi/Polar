@@ -218,6 +218,14 @@ async function watchStellarEvents(onLockEvent, processedData) {
                         
                         console.log(`   Loan Amount (${CONFIG.LTV_RATIO * 100}% LTV): ${loanAmountDev} PAS`);
                         
+                        // Mark as processed IMMEDIATELY to prevent duplicate processing
+                        processedData.processedStellarTxIds.push(event.id);
+                        if (processedData.processedStellarTxIds.length > 1000) {
+                            processedData.processedStellarTxIds = processedData.processedStellarTxIds.slice(-1000);
+                        }
+                        saveProcessedEvents(processedData);
+                        
+                        // Now process the event (async)
                         await onLockEvent({
                             eventId: event.id,
                             evmAddress,
@@ -227,12 +235,6 @@ async function watchStellarEvents(onLockEvent, processedData) {
                             ledger: event.ledger,
                             direction: 'stellar-to-evm'
                         });
-                        
-                        // Mark as processed
-                        processedData.processedStellarTxIds.push(event.id);
-                        if (processedData.processedStellarTxIds.length > 1000) {
-                            processedData.processedStellarTxIds = processedData.processedStellarTxIds.slice(-1000);
-                        }
                         
                         console.log('============================================\n');
                         
@@ -366,41 +368,75 @@ async function watchEvmEvents(evm, onEvmDeposit, processedData) {
 // RELEASE LIQUIDITY ON EVM (Paseo Asset Hub)
 // ============================================
 async function releaseOnEvm(evm, eventData) {
+    console.log('\n📡 ═══════════════════════════════════════════════════════════════');
+    console.log('   💸 WEB3 CONTRACT CALL: Release Liquidity on Paseo Asset Hub');
+    console.log('═══════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Contract: ${CONFIG.EVM_POOL_ADDRESS}`);
+    console.log(`   📋 Method: releaseLiquidity()`);
+    console.log(`   📋 Network: Paseo Asset Hub (Chain ID: ${CONFIG.EVM_CHAIN_ID})`);
+    console.log(`   📋 Recipient: ${eventData.evmAddress}`);
+    console.log(`   📋 Amount: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+    console.log(`   📋 Event ID: ${eventData.eventId}`);
+    
     if (!evm) {
-        console.log('⚠️  EVM not configured. Would release:');
+        console.log('\n   ⚠️  EVM not configured. Would release:');
         console.log(`   To: ${eventData.evmAddress}`);
         console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
         return;
     }
     
     const { poolContract, wallet } = evm;
-    
-    console.log(`💸 Releasing liquidity on Paseo Asset Hub...`);
-    console.log(`   To: ${eventData.evmAddress}`);
-    console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+    console.log(`   📋 Relayer Wallet: ${wallet.address}`);
     
     try {
         // Check pool balance first
+        console.log('\n   🔍 Step 1: Checking pool balance...');
         const poolBalance = await poolContract.getBalance();
+        console.log(`   📊 Pool Balance: ${ethers.formatEther(poolBalance)} PAS`);
+        console.log(`   📊 Required: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+        
         if (poolBalance < eventData.loanAmountWei) {
-            console.error(`❌ Insufficient pool balance: ${ethers.formatEther(poolBalance)} PAS`);
+            console.error('\n   ═══════════════════════════════════════════════════════════');
+            console.error('   ❌ INSUFFICIENT POOL BALANCE');
+            console.error('   ═══════════════════════════════════════════════════════════');
+            console.error(`   Available: ${ethers.formatEther(poolBalance)} PAS`);
+            console.error(`   Required: ${ethers.formatEther(eventData.loanAmountWei)} PAS`);
+            console.error('═══════════════════════════════════════════════════════════════════\n');
             return;
         }
+        console.log('   ✅ Sufficient balance available');
         
         // Call releaseLiquidity on EVM pool
+        console.log('\n   📤 Step 2: Sending transaction to Paseo Asset Hub...');
         const tx = await poolContract.releaseLiquidity(
             eventData.evmAddress,
             eventData.loanAmountWei
         );
         
-        console.log(`   TX Hash: ${tx.hash}`);
-        console.log(`   Waiting for confirmation...`);
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   ✅ TRANSACTION SUBMITTED TO PASEO');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   🔗 TX HASH: ${tx.hash}`);
+        console.log(`   🔗 Explorer: ${CONFIG.EVM_EXPLORER_URL}/tx/${tx.hash}`);
+        console.log(`   📊 Nonce: ${tx.nonce}`);
+        console.log(`   ⛽ Gas Limit: ${tx.gasLimit?.toString()}`);
         
+        console.log('\n   ⏳ Step 3: Waiting for confirmation...');
         const receipt = await tx.wait();
-        console.log(`✅ EVM TX confirmed in block ${receipt.blockNumber}`);
+        
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   ✅ EVM TRANSACTION CONFIRMED!');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   🔗 TX HASH: ${tx.hash}`);
+        console.log(`   📦 Block Number: ${receipt.blockNumber}`);
+        console.log(`   ⛽ Gas Used: ${receipt.gasUsed?.toString()}`);
+        console.log(`   📊 Status: ${receipt.status === 1 ? 'SUCCESS ✓' : 'FAILED ✗'}`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
         
         // Notify API server that PAS was sent (if server is running)
         try {
+            console.log('   📡 Notifying API server...');
             const response = await fetch(`${CONFIG.API_SERVER_URL}/api/purchase-completed`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -412,7 +448,7 @@ async function releaseOnEvm(evm, eventData) {
                 })
             });
             if (response.ok) {
-                console.log(`   📡 Notified API server`);
+                console.log(`   ✅ API server notified successfully`);
             }
         } catch (notifyError) {
             // Server might not be running, that's OK
@@ -420,7 +456,17 @@ async function releaseOnEvm(evm, eventData) {
         }
         
     } catch (e) {
-        console.error(`❌ EVM TX failed: ${e.message}`);
+        console.error('\n   ═══════════════════════════════════════════════════════════');
+        console.error('   ❌ EVM TRANSACTION FAILED');
+        console.error('   ═══════════════════════════════════════════════════════════');
+        console.error(`   Error: ${e.message}`);
+        if (e.transaction) {
+            console.error(`   TX Hash: ${e.transaction.hash}`);
+        }
+        if (e.code) {
+            console.error(`   Error Code: ${e.code}`);
+        }
+        console.error('═══════════════════════════════════════════════════════════════════\n');
     }
 }
 
@@ -428,24 +474,34 @@ async function releaseOnEvm(evm, eventData) {
 // RELEASE LIQUIDITY ON STELLAR
 // ============================================
 async function releaseOnStellar(stellar, eventData) {
+    console.log('\n📡 ═══════════════════════════════════════════════════════════════');
+    console.log('   💸 WEB3 CALL: Release Liquidity on Stellar');
+    console.log('═══════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Network: Stellar Testnet`);
+    console.log(`   📋 Operation: Payment`);
+    console.log(`   📋 Recipient: ${eventData.stellarAddress}`);
+    console.log(`   📋 Amount: ${eventData.loanAmountXlm} XLM`);
+    console.log(`   📋 Source TX: ${eventData.txHash}`);
+    
     if (!stellar) {
-        console.log('⚠️  Stellar not configured. Would release:');
+        console.log('\n   ⚠️  Stellar not configured. Would release:');
         console.log(`   To: ${eventData.stellarAddress}`);
         console.log(`   Amount: ${eventData.loanAmountXlm} XLM`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
         return;
     }
     
     const { server, keypair } = stellar;
-    
-    console.log(`💸 Releasing liquidity on Stellar...`);
-    console.log(`   To: ${eventData.stellarAddress}`);
-    console.log(`   Amount: ${eventData.loanAmountXlm} XLM`);
+    console.log(`   📋 Relayer: ${keypair.publicKey()}`);
     
     try {
         // Load the relayer's account
+        console.log('\n   🔍 Step 1: Loading relayer account...');
         const account = await server.getAccount(keypair.publicKey());
+        console.log(`   ✅ Account loaded. Sequence: ${account.sequenceNumber()}`);
         
         // Build transaction to send XLM
+        console.log('\n   🔨 Step 2: Building payment transaction...');
         const transaction = new TransactionBuilder(account, {
             fee: BASE_FEE,
             networkPassphrase: Networks.TESTNET
@@ -457,16 +513,30 @@ async function releaseOnStellar(stellar, eventData) {
         }))
         .setTimeout(30)
         .build();
+        console.log('   ✅ Transaction built');
         
         // Sign and submit
+        console.log('\n   ✍️  Step 3: Signing transaction...');
         transaction.sign(keypair);
+        console.log('   ✅ Transaction signed');
+        
+        console.log('\n   📤 Step 4: Submitting to Stellar network...');
         const response = await server.sendTransaction(transaction);
         
-        console.log(`   TX Hash: ${response.hash}`);
-        console.log(`✅ Stellar TX submitted`);
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   ✅ STELLAR TRANSACTION SUBMITTED!');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   🔗 TX HASH: ${response.hash}`);
+        console.log(`   🔗 Explorer: https://stellar.expert/explorer/testnet/tx/${response.hash}`);
+        console.log(`   📊 Status: ${response.status}`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
         
     } catch (e) {
-        console.error(`❌ Stellar TX failed: ${e.message}`);
+        console.error('\n   ═══════════════════════════════════════════════════════════');
+        console.error('   ❌ STELLAR TRANSACTION FAILED');
+        console.error('   ═══════════════════════════════════════════════════════════');
+        console.error(`   Error: ${e.message}`);
+        console.error('═══════════════════════════════════════════════════════════════════\n');
     }
 }
 
