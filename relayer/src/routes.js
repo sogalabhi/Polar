@@ -7,6 +7,19 @@ const StellarSdk = require('@stellar/stellar-sdk');
 const { ethers } = require('ethers');
 const Razorpay = require('razorpay');
 
+// Import lending configuration
+const {
+    LENDING_CONFIG,
+    calculateRequiredCollateral,
+    calculateHealthFactor,
+    calculateLiquidationPrice,
+    calculateAccruedInterest,
+    calculateLateFee,
+    getInterestRateForDuration,
+    calculateLiquidationAmounts,
+    daysBetween,
+} = require('./lending-config');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -34,11 +47,18 @@ const CONFIG = {
     // Paseo Asset Hub EVM Configuration
     PASEO_RPC_URL: process.env.PASEO_RPC_URL || 'https://testnet-passet-hub-eth-rpc.polkadot.io',
     EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x49e12e876588052A977dB816107B1772B4103E3e',
+    EVM_RELAYER_PRIVATE_KEY: process.env.EVM_RELAYER_PRIVATE_KEY || '',
     
     // Razorpay Configuration
     RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
 };
+
+// EVM Pool Contract ABI
+const EVM_POOL_ABI = [
+    "function releaseLiquidity(address payable to, uint256 amount) external",
+    "function getBalance() external view returns (uint256)",
+];
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -56,6 +76,18 @@ const ownerKeypair = Keypair.fromSecret(CONFIG.STELLAR_OWNER_SECRET);
 
 // Initialize Paseo Asset Hub EVM provider
 const paseoProvider = new ethers.JsonRpcProvider(CONFIG.PASEO_RPC_URL);
+
+// Initialize EVM relayer wallet and pool contract (for sending PAS)
+let evmRelayerWallet = null;
+let evmPoolContract = null;
+
+if (CONFIG.EVM_RELAYER_PRIVATE_KEY) {
+    evmRelayerWallet = new ethers.Wallet(CONFIG.EVM_RELAYER_PRIVATE_KEY, paseoProvider);
+    evmPoolContract = new ethers.Contract(CONFIG.EVM_POOL_ADDRESS, EVM_POOL_ABI, evmRelayerWallet);
+    console.log(`🔑 EVM Relayer Address: ${evmRelayerWallet.address}`);
+} else {
+    console.log('⚠️  EVM_RELAYER_PRIVATE_KEY not set - PAS release from pool disabled');
+}
 
 console.log(`🔑 Owner Stellar Address: ${ownerKeypair.publicKey()}`);
 console.log(`🔗 Paseo RPC: ${CONFIG.PASEO_RPC_URL}`);
@@ -112,6 +144,75 @@ async function getPasBalance(evmAddress) {
             balanceWei: '0',
             error: error.message
         };
+    }
+}
+
+// ============================================
+// SEND PAS FROM POOL
+// ============================================
+
+/**
+ * Send PAS tokens from the pool to a user
+ * @param {string} evmAddress - Recipient EVM address
+ * @param {number} pasAmount - Amount of PAS to send
+ * @returns {Promise<{success: boolean, txHash?: string, error?: string}>}
+ */
+async function sendPasFromPool(evmAddress, pasAmount) {
+    console.log('\n📡 ═══════════════════════════════════════════════════════════════');
+    console.log('   💸 WEB3 CONTRACT CALL: Release PAS from Pool');
+    console.log('═══════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Contract: ${CONFIG.EVM_POOL_ADDRESS}`);
+    console.log(`   📋 Method: releaseLiquidity()`);
+    console.log(`   📋 Recipient: ${evmAddress}`);
+    console.log(`   📋 Amount: ${pasAmount} PAS`);
+    
+    if (!evmPoolContract || !evmRelayerWallet) {
+        console.error('   ❌ EVM relayer not configured. Set EVM_RELAYER_PRIVATE_KEY in .env');
+        return { success: false, error: 'EVM relayer not configured' };
+    }
+    
+    try {
+        const amountWei = ethers.parseEther(pasAmount.toString());
+        console.log(`   📋 Amount (Wei): ${amountWei.toString()}`);
+        
+        // Check pool balance first
+        console.log('\n   🔍 Step 1: Checking pool balance...');
+        const poolBalance = await evmPoolContract.getBalance();
+        console.log(`   📊 Pool Balance: ${ethers.formatEther(poolBalance)} PAS`);
+        console.log(`   📊 Required: ${pasAmount} PAS`);
+        
+        if (poolBalance < amountWei) {
+            console.error('   ❌ Insufficient pool balance!');
+            return { success: false, error: 'Insufficient pool balance' };
+        }
+        console.log('   ✅ Sufficient balance available');
+        
+        // Send transaction
+        console.log('\n   📤 Step 2: Sending transaction...');
+        const tx = await evmPoolContract.releaseLiquidity(evmAddress, amountWei);
+        
+        console.log(`   🔗 TX Hash: ${tx.hash}`);
+        console.log('   ⏳ Waiting for confirmation...');
+        
+        const receipt = await tx.wait();
+        
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   ✅ PAS SENT SUCCESSFULLY!');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   🔗 TX Hash: ${tx.hash}`);
+        console.log(`   📦 Block: ${receipt.blockNumber}`);
+        console.log(`   ⛽ Gas Used: ${receipt.gasUsed?.toString()}`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
+        return { success: true, txHash: tx.hash };
+        
+    } catch (error) {
+        console.error('\n   ═══════════════════════════════════════════════════════════');
+        console.error('   ❌ FAILED TO SEND PAS');
+        console.error('   ═══════════════════════════════════════════════════════════');
+        console.error(`   Error: ${error.message}`);
+        console.error('═══════════════════════════════════════════════════════════════════\n');
+        return { success: false, error: error.message };
     }
 }
 
@@ -984,6 +1085,669 @@ app.post('/api/payback-completed', async (req, res) => {
 });
 
 // ============================================
+// LENDING PROTOCOL: BORROW PAS WITH COLLATERAL
+// ============================================
+
+/**
+ * Get XLM price in INR from CoinGecko
+ */
+async function getXlmPrice() {
+    try {
+        const response = await fetch(
+            `${CONFIG.COINGECKO_API}/simple/price?ids=stellar&vs_currencies=inr`
+        );
+        const data = await response.json();
+        return data['stellar']?.inr || 18.92; // Fallback price
+    } catch (error) {
+        console.error('Error fetching XLM price:', error.message);
+        return 18.92; // Fallback
+    }
+}
+
+/**
+ * Create a new collateralized loan
+ * User locks XLM as collateral and borrows PAS tokens
+ */
+app.post('/api/borrow-pas', async (req, res) => {
+    const { 
+        userId, 
+        borrowAmountInr, 
+        evmAddress, 
+        loanType = 'standard',
+        ltvRatio = 60,  // User's chosen LTV (50-75%)
+        customDuration = null 
+    } = req.body;
+    
+    // Validate inputs
+    if (!userId || !borrowAmountInr || !evmAddress) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields: userId, borrowAmountInr, evmAddress'
+        });
+    }
+    
+    if (borrowAmountInr < LENDING_CONFIG.LTV.MIN_BORROW_INR) {
+        return res.status(400).json({
+            success: false,
+            error: `Minimum borrow amount is ₹${LENDING_CONFIG.LTV.MIN_BORROW_INR}`
+        });
+    }
+    
+    // Validate EVM address
+    if (!ethers.isAddress(evmAddress)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid EVM address'
+        });
+    }
+    
+    // Get loan type configuration
+    const loanTypeConfig = LENDING_CONFIG.LOAN_TYPES[loanType];
+    if (!loanTypeConfig && loanType !== 'custom') {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid loan type. Use: short, standard, long, or custom'
+        });
+    }
+    
+    // Validate LTV ratio
+    const maxLtv = loanTypeConfig?.maxLtv || 0.75;
+    const userLtv = ltvRatio / 100;
+    if (userLtv < 0.5 || userLtv > maxLtv) {
+        return res.status(400).json({
+            success: false,
+            error: `LTV must be between 50% and ${maxLtv * 100}% for ${loanType} loans`
+        });
+    }
+    
+    const normalizedAddress = userId.toLowerCase();
+    
+    try {
+        console.log('\n📡 ═══════════════════════════════════════════════════════════════');
+        console.log('   🏦 NEW COLLATERALIZED LOAN REQUEST');
+        console.log('═══════════════════════════════════════════════════════════════════');
+        console.log(`   📋 User: ${userId}`);
+        console.log(`   📋 Borrow Amount: ₹${borrowAmountInr}`);
+        console.log(`   📋 EVM Address: ${evmAddress}`);
+        console.log(`   📋 Loan Type: ${loanType}`);
+        console.log(`   📋 LTV Ratio: ${ltvRatio}%`);
+        
+        // 1. Get current prices
+        const [xlmPrice, pasRates] = await Promise.all([
+            getXlmPrice(),
+            getPasToInrRate()
+        ]);
+        
+        console.log(`\n   💰 Current Prices:`);
+        console.log(`   📈 XLM: ₹${xlmPrice.toFixed(2)}`);
+        console.log(`   📈 PAS: ₹${pasRates.pasToInr.toFixed(2)}`);
+        
+        // 2. Calculate loan parameters
+        const duration = loanTypeConfig?.duration || customDuration || 30;
+        const interestRate = loanTypeConfig?.interestRate || getInterestRateForDuration(duration);
+        
+        // Calculate required collateral based on user's chosen LTV
+        const collateralInr = borrowAmountInr / userLtv;
+        const collateralXlm = collateralInr / xlmPrice;
+        
+        // Calculate PAS to receive
+        const pasAmount = borrowAmountInr / pasRates.pasToInr;
+        
+        // Calculate health factor
+        const healthFactor = calculateHealthFactor(collateralInr, borrowAmountInr);
+        
+        // Calculate liquidation price
+        const liquidationPrice = calculateLiquidationPrice(borrowAmountInr, collateralXlm);
+        
+        // Calculate estimated interest
+        const interestEstimate = calculateAccruedInterest(borrowAmountInr, interestRate, duration);
+        
+        // Set deadlines
+        const loanStartDate = new Date();
+        const repaymentDeadline = new Date(loanStartDate.getTime() + duration * 24 * 60 * 60 * 1000);
+        const gracePeriodEnds = new Date(repaymentDeadline.getTime() + LENDING_CONFIG.LIQUIDATION.GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000);
+        
+        console.log(`\n   📊 Loan Calculation:`);
+        console.log(`   📋 Collateral Required: ₹${collateralInr.toFixed(2)} (${collateralXlm.toFixed(4)} XLM)`);
+        console.log(`   📋 PAS to Receive: ${pasAmount.toFixed(4)} PAS`);
+        console.log(`   📋 Health Factor: ${healthFactor.toFixed(2)}`);
+        console.log(`   📋 Liquidation Price: ₹${liquidationPrice.toFixed(2)}/XLM`);
+        console.log(`   📋 Duration: ${duration} days`);
+        console.log(`   📋 Interest Rate: ${(interestRate * 100).toFixed(1)}% APY`);
+        console.log(`   📋 Est. Interest: ₹${interestEstimate.interestAccrued.toFixed(2)}`);
+        console.log(`   📋 Deadline: ${repaymentDeadline.toISOString()}`);
+        
+        // 3. Validate minimum collateral
+        if (collateralInr < LENDING_CONFIG.LTV.MIN_COLLATERAL_INR) {
+            return res.status(400).json({
+                success: false,
+                error: `Minimum collateral is ₹${LENDING_CONFIG.LTV.MIN_COLLATERAL_INR}`
+            });
+        }
+        
+        // 4. Check user's INR balance for collateral
+        const { data: wallet, error: walletError } = await supabase
+            .from('wallets')
+            .select('balance_inr')
+            .eq('wallet_address', normalizedAddress)
+            .single();
+        
+        if (walletError) {
+            throw new Error(`Wallet not found: ${walletError.message}`);
+        }
+        
+        const currentBalance = parseFloat(wallet.balance_inr) || 0;
+        console.log(`\n   💳 User Balance: ₹${currentBalance.toFixed(2)}`);
+        
+        if (currentBalance < collateralInr) {
+            return res.status(400).json({
+                success: false,
+                error: `Insufficient balance for collateral. Need ₹${collateralInr.toFixed(2)}, have ₹${currentBalance.toFixed(2)}`
+            });
+        }
+        
+        // 5. Lock XLM on Stellar blockchain
+        console.log(`\n   🔗 Step 1: Locking collateral on Stellar blockchain...`);
+        const lockResult = await lockXlmOnStellar(collateralXlm, evmAddress);
+        
+        if (!lockResult.success) {
+            console.error(`   ❌ Blockchain transaction failed: ${lockResult.error}`);
+            return res.status(500).json({
+                success: false,
+                error: `Failed to lock collateral: ${lockResult.error}`
+            });
+        }
+        
+        console.log(`   ✅ XLM locked successfully!`);
+        console.log(`   🔗 TX Hash: ${lockResult.txHash}`);
+        
+        // 6. Create loan record in database
+        console.log(`\n   📝 Step 2: Recording loan in database...`);
+        
+        const { data: loan, error: insertError } = await supabase
+            .from('crypto_purchases')
+            .insert({
+                user_id: normalizedAddress,
+                from_amount: collateralInr,
+                to_token: 'PAS',
+                to_amount: pasAmount,
+                exchange_rate: pasRates.pasToInr,
+                destination_address: evmAddress,
+                xlm_locked: collateralXlm,
+                
+                // Lending-specific fields
+                collateral_xlm: collateralXlm,
+                collateral_value_inr: collateralInr,
+                borrowed_pas: pasAmount,
+                borrowed_value_inr: borrowAmountInr,
+                ltv_at_creation: userLtv,
+                interest_rate_apy: interestRate,
+                interest_accrued: 0,
+                last_interest_update: loanStartDate.toISOString(),
+                health_factor: healthFactor,
+                liquidation_threshold: LENDING_CONFIG.LTV.LIQUIDATION_THRESHOLD,
+                liquidation_price_xlm: liquidationPrice,
+                loan_start_date: loanStartDate.toISOString(),
+                repayment_deadline: repaymentDeadline.toISOString(),
+                grace_period_ends: gracePeriodEnds.toISOString(),
+                late_fee: 0,
+                liquidation_penalty: LENDING_CONFIG.LIQUIDATION.PENALTY,
+                loan_type: loanType,
+                loan_duration_days: duration,
+                is_liquidated: false,
+                
+                status: 'active',
+                stellar_tx_hash: lockResult.txHash,
+                slippage_tolerance: 1
+            })
+            .select()
+            .single();
+        
+        if (insertError) {
+            console.error(`   ⚠️  Database insert failed: ${insertError.message}`);
+            // Blockchain succeeded but DB failed - critical error
+            return res.status(500).json({
+                success: false,
+                error: 'Loan recorded on blockchain but database save failed. Contact support.',
+                stellarTxHash: lockResult.txHash
+            });
+        }
+        
+        console.log(`   ✅ Loan record created: ${loan.id}`);
+        
+        // 7. Deduct collateral value from wallet (as it's now locked)
+        const newBalance = currentBalance - collateralInr;
+        
+        const { error: updateError } = await supabase
+            .from('wallets')
+            .update({ 
+                balance_inr: newBalance,
+                updated_at: new Date().toISOString()
+            })
+            .eq('wallet_address', normalizedAddress);
+        
+        if (updateError) {
+            console.error(`   ⚠️  Wallet update failed: ${updateError.message}`);
+        } else {
+            console.log(`   ✅ Wallet updated: ₹${currentBalance.toFixed(2)} → ₹${newBalance.toFixed(2)}`);
+        }
+        
+        // 8. SEND PAS TOKENS TO USER
+        console.log(`\n   💸 Step 3: Sending ${pasAmount.toFixed(4)} PAS to ${evmAddress}...`);
+        console.log(`   📋 EVM Pool Contract configured: ${evmPoolContract ? 'YES' : 'NO'}`);
+        console.log(`   📋 EVM Relayer Wallet configured: ${evmRelayerWallet ? 'YES' : 'NO'}`);
+        
+        const pasResult = await sendPasFromPool(evmAddress, pasAmount);
+        
+        let evmTxHash = null;
+        if (pasResult.success) {
+            evmTxHash = pasResult.txHash;
+            console.log(`   ✅ PAS sent! TX: ${evmTxHash}`);
+            
+            // Update loan record with EVM TX hash
+            await supabase
+                .from('crypto_purchases')
+                .update({ evm_tx_hash: evmTxHash })
+                .eq('id', loan.id);
+        } else {
+            console.error(`   ⚠️  Failed to send PAS: ${pasResult.error}`);
+            console.error(`   ℹ️  Loan created but PAS not sent. User can retry or contact support.`);
+        }
+        
+        console.log('\n   ═══════════════════════════════════════════════════════════');
+        console.log('   🎉 LOAN CREATED SUCCESSFULLY!');
+        console.log('   ═══════════════════════════════════════════════════════════');
+        console.log(`   📋 Loan ID: ${loan.id}`);
+        console.log(`   💎 Collateral: ${collateralXlm.toFixed(4)} XLM (₹${collateralInr.toFixed(2)})`);
+        console.log(`   🟣 Borrowed: ${pasAmount.toFixed(4)} PAS (₹${borrowAmountInr.toFixed(2)})`);
+        console.log(`   📈 Health Factor: ${healthFactor.toFixed(2)}`);
+        console.log(`   ⏰ Deadline: ${repaymentDeadline.toLocaleDateString()}`);
+        if (evmTxHash) {
+            console.log(`   🔗 PAS TX: ${evmTxHash}`);
+        }
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+        
+        // 9. Return loan details
+        res.json({
+            success: true,
+            message: pasResult.success 
+                ? 'Loan created successfully! PAS tokens have been sent to your wallet.'
+                : 'Loan created but PAS transfer pending. Please check your wallet or contact support.',
+            pasSent: pasResult.success,
+            data: {
+                loanId: loan.id,
+                
+                // Collateral info
+                collateralXlm,
+                collateralValueInr: collateralInr,
+                
+                // Loan info
+                borrowedPas: pasAmount,
+                borrowedValueInr: borrowAmountInr,
+                
+                // Terms
+                loanType,
+                duration,
+                interestRate: interestRate * 100,
+                ltvRatio: userLtv * 100,
+                
+                // Risk metrics
+                healthFactor,
+                liquidationPrice,
+                liquidationThreshold: LENDING_CONFIG.LTV.LIQUIDATION_THRESHOLD * 100,
+                
+                // Deadlines
+                loanStartDate: loanStartDate.toISOString(),
+                repaymentDeadline: repaymentDeadline.toISOString(),
+                gracePeriodEnds: gracePeriodEnds.toISOString(),
+                
+                // Estimated costs
+                estimatedInterest: interestEstimate.interestAccrued,
+                estimatedTotalRepay: borrowAmountInr + interestEstimate.interestAccrued,
+                
+                // Transaction
+                stellarTxHash: lockResult.txHash,
+                stellarExplorer: `https://stellar.expert/explorer/testnet/tx/${lockResult.txHash}`,
+                evmTxHash: evmTxHash,
+                evmExplorer: evmTxHash ? `https://blockscout-asset-hub-paseo.parity-chains-scoutplorer.io/tx/${evmTxHash}` : null,
+                evmAddress,
+                status: 'active',
+                
+                // Wallet
+                newWalletBalance: newBalance
+            }
+        });
+        
+    } catch (error) {
+        console.error(`\n   ❌ Error:`, error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Get loan details with current health factor
+ */
+app.get('/api/loan/:loanId', async (req, res) => {
+    const { loanId } = req.params;
+    
+    try {
+        // Fetch loan from database
+        const { data: loan, error } = await supabase
+            .from('crypto_purchases')
+            .select('*')
+            .eq('id', loanId)
+            .single();
+        
+        if (error || !loan) {
+            return res.status(404).json({
+                success: false,
+                error: 'Loan not found'
+            });
+        }
+        
+        // Get current prices
+        const xlmPrice = await getXlmPrice();
+        const pasRates = await getPasToInrRate();
+        
+        // Calculate current values
+        const currentCollateralValue = loan.collateral_xlm * xlmPrice;
+        const daysElapsed = daysBetween(loan.loan_start_date, new Date());
+        const daysUntilDeadline = daysBetween(new Date(), loan.repayment_deadline);
+        
+        // Calculate accrued interest
+        const interest = calculateAccruedInterest(
+            loan.borrowed_value_inr,
+            loan.interest_rate_apy,
+            daysElapsed
+        );
+        
+        // Calculate late fee if overdue
+        const daysOverdue = Math.max(0, -daysUntilDeadline);
+        const lateFee = calculateLateFee(
+            loan.borrowed_value_inr + interest.interestAccrued,
+            daysOverdue
+        );
+        
+        // Total debt
+        const totalDebt = loan.borrowed_value_inr + interest.interestAccrued + lateFee;
+        
+        // Current health factor
+        const currentHealthFactor = calculateHealthFactor(currentCollateralValue, totalDebt);
+        
+        // Current liquidation price
+        const currentLiquidationPrice = calculateLiquidationPrice(totalDebt, loan.collateral_xlm);
+        
+        // Health status
+        const healthStatus = LENDING_CONFIG.HEALTH_FACTOR.getStatus(currentHealthFactor);
+        
+        res.json({
+            success: true,
+            loan: {
+                id: loan.id,
+                userId: loan.user_id,
+                status: loan.status,
+                
+                // Collateral
+                collateralXlm: loan.collateral_xlm,
+                collateralValueAtCreation: loan.collateral_value_inr,
+                currentCollateralValue,
+                
+                // Borrowed
+                borrowedPas: loan.borrowed_pas,
+                borrowedValueInr: loan.borrowed_value_inr,
+                
+                // Interest
+                interestRateApy: loan.interest_rate_apy * 100,
+                interestAccrued: interest.interestAccrued,
+                dailyInterest: interest.dailyInterest,
+                
+                // Late fees
+                daysOverdue,
+                lateFee,
+                
+                // Total
+                totalDebt,
+                
+                // Health
+                healthFactor: currentHealthFactor,
+                healthStatus: healthStatus.status,
+                healthLabel: healthStatus.label,
+                healthColor: healthStatus.color,
+                
+                // Liquidation
+                liquidationPrice: currentLiquidationPrice,
+                liquidationThreshold: loan.liquidation_threshold * 100,
+                isLiquidatable: currentHealthFactor < 1.0,
+                
+                // Dates
+                loanStartDate: loan.loan_start_date,
+                repaymentDeadline: loan.repayment_deadline,
+                gracePeriodEnds: loan.grace_period_ends,
+                daysElapsed,
+                daysUntilDeadline,
+                isOverdue: daysUntilDeadline < 0,
+                
+                // Loan type
+                loanType: loan.loan_type,
+                durationDays: loan.loan_duration_days,
+                
+                // Transactions
+                stellarTxHash: loan.stellar_tx_hash,
+                evmTxHash: loan.evm_tx_hash,
+                
+                // Current prices
+                currentXlmPrice: xlmPrice,
+                currentPasPrice: pasRates.pasToInr
+            }
+        });
+        
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Get all active loans for a user
+ */
+app.get('/api/loans/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const normalizedAddress = userId.toLowerCase();
+    
+    try {
+        // Fetch all loans for user
+        const { data: loans, error } = await supabase
+            .from('crypto_purchases')
+            .select('*')
+            .eq('user_id', normalizedAddress)
+            .in('status', ['active', 'locked', 'overdue', 'pending'])
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        // Get current prices
+        const xlmPrice = await getXlmPrice();
+        const pasRates = await getPasToInrRate();
+        
+        // Enrich each loan with current calculations
+        const enrichedLoans = loans.map(loan => {
+            const currentCollateralValue = loan.collateral_xlm * xlmPrice;
+            const daysElapsed = daysBetween(loan.loan_start_date || loan.created_at, new Date());
+            const daysUntilDeadline = daysBetween(new Date(), loan.repayment_deadline || loan.created_at);
+            
+            const interest = calculateAccruedInterest(
+                loan.borrowed_value_inr || loan.from_amount,
+                loan.interest_rate_apy || 0.08,
+                daysElapsed
+            );
+            
+            const daysOverdue = Math.max(0, -daysUntilDeadline);
+            const lateFee = calculateLateFee(
+                (loan.borrowed_value_inr || loan.from_amount) + interest.interestAccrued,
+                daysOverdue
+            );
+            
+            const totalDebt = (loan.borrowed_value_inr || loan.from_amount) + interest.interestAccrued + lateFee;
+            const currentHealthFactor = calculateHealthFactor(currentCollateralValue, totalDebt);
+            const healthStatus = LENDING_CONFIG.HEALTH_FACTOR.getStatus(currentHealthFactor);
+            
+            return {
+                ...loan,
+                currentCollateralValue,
+                interestAccrued: interest.interestAccrued,
+                lateFee,
+                totalDebt,
+                healthFactor: currentHealthFactor,
+                healthStatus: healthStatus.status,
+                healthLabel: healthStatus.label,
+                daysUntilDeadline,
+                isOverdue: daysUntilDeadline < 0
+            };
+        });
+        
+        res.json({
+            success: true,
+            loans: enrichedLoans,
+            count: enrichedLoans.length,
+            prices: {
+                xlm: xlmPrice,
+                pas: pasRates.pasToInr
+            }
+        });
+        
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Get lending configuration (for frontend)
+ */
+app.get('/api/lending/config', async (req, res) => {
+    try {
+        const xlmPrice = await getXlmPrice();
+        const pasRates = await getPasToInrRate();
+        
+        res.json({
+            success: true,
+            config: {
+                ltv: {
+                    maxLtv: LENDING_CONFIG.LTV.MAX_LTV * 100,
+                    liquidationThreshold: LENDING_CONFIG.LTV.LIQUIDATION_THRESHOLD * 100,
+                    minCollateral: LENDING_CONFIG.LTV.MIN_COLLATERAL_INR,
+                    minBorrow: LENDING_CONFIG.LTV.MIN_BORROW_INR
+                },
+                loanTypes: LENDING_CONFIG.LOAN_TYPES,
+                interest: {
+                    baseApy: LENDING_CONFIG.INTEREST.BASE_APY * 100,
+                    rateByDuration: Object.fromEntries(
+                        Object.entries(LENDING_CONFIG.INTEREST.RATE_BY_DURATION)
+                            .map(([k, v]) => [k, v * 100])
+                    )
+                },
+                liquidation: {
+                    penalty: LENDING_CONFIG.LIQUIDATION.PENALTY * 100,
+                    gracePeriodDays: LENDING_CONFIG.LIQUIDATION.GRACE_PERIOD_DAYS
+                },
+                deadlines: {
+                    lateFeePerDay: LENDING_CONFIG.DEADLINES.LATE_FEE_PERCENT_PER_DAY * 100,
+                    maxLateDays: LENDING_CONFIG.DEADLINES.MAX_LATE_DAYS,
+                    gracePeriodDays: LENDING_CONFIG.DEADLINES.GRACE_PERIOD_DAYS
+                },
+                healthFactor: {
+                    safe: LENDING_CONFIG.HEALTH_FACTOR.SAFE_THRESHOLD,
+                    warning: LENDING_CONFIG.HEALTH_FACTOR.WARNING_THRESHOLD,
+                    danger: LENDING_CONFIG.HEALTH_FACTOR.DANGER_THRESHOLD
+                }
+            },
+            prices: {
+                xlm: xlmPrice,
+                pas: pasRates.pasToInr
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Calculate loan preview (without creating)
+ */
+app.post('/api/lending/preview', async (req, res) => {
+    const { borrowAmountInr, ltvRatio = 60, loanType = 'standard', customDuration = null } = req.body;
+    
+    if (!borrowAmountInr || borrowAmountInr <= 0) {
+        return res.status(400).json({
+            success: false,
+            error: 'borrowAmountInr is required'
+        });
+    }
+    
+    try {
+        const xlmPrice = await getXlmPrice();
+        const pasRates = await getPasToInrRate();
+        
+        const loanTypeConfig = LENDING_CONFIG.LOAN_TYPES[loanType];
+        const duration = loanTypeConfig?.duration || customDuration || 30;
+        const interestRate = loanTypeConfig?.interestRate || getInterestRateForDuration(duration);
+        const maxLtv = loanTypeConfig?.maxLtv || 0.75;
+        
+        const userLtv = Math.min(ltvRatio / 100, maxLtv);
+        const collateralInr = borrowAmountInr / userLtv;
+        const collateralXlm = collateralInr / xlmPrice;
+        const pasAmount = borrowAmountInr / pasRates.pasToInr;
+        
+        const healthFactor = calculateHealthFactor(collateralInr, borrowAmountInr);
+        const liquidationPrice = calculateLiquidationPrice(borrowAmountInr, collateralXlm);
+        const interest = calculateAccruedInterest(borrowAmountInr, interestRate, duration);
+        
+        const priceDropToLiquidation = ((xlmPrice - liquidationPrice) / xlmPrice * 100).toFixed(1);
+        
+        res.json({
+            success: true,
+            preview: {
+                // What user provides
+                collateralXlm,
+                collateralValueInr: collateralInr,
+                
+                // What user receives
+                borrowedPas: pasAmount,
+                borrowedValueInr: borrowAmountInr,
+                
+                // Terms
+                loanType,
+                duration,
+                interestRate: interestRate * 100,
+                maxLtv: maxLtv * 100,
+                actualLtv: userLtv * 100,
+                
+                // Risk
+                healthFactor,
+                liquidationPrice,
+                priceDropToLiquidation,
+                
+                // Costs
+                estimatedInterest: interest.interestAccrued,
+                dailyInterest: interest.dailyInterest,
+                totalToRepay: borrowAmountInr + interest.interestAccrued,
+                
+                // Deadlines
+                deadline: new Date(Date.now() + duration * 24 * 60 * 60 * 1000).toISOString(),
+                
+                // Prices used
+                xlmPrice,
+                pasPrice: pasRates.pasToInr
+            }
+        });
+        
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
 // TEST ENDPOINT: Add balance to user wallet
 // ============================================
 app.post('/api/test/add-balance', async (req, res) => {
@@ -1052,14 +1816,18 @@ app.listen(CONFIG.PORT, () => {
     console.log(`   GET  /api/pas-balance/:address  - Get real PAS balance from Paseo`);
     console.log(`   POST /api/buy-pas               - Buy PAS tokens with INR`);
     console.log(`   POST /api/purchase-completed    - Webhook for relayer`);
+    console.log(`\n   🏦 LENDING PROTOCOL:`);
+    console.log(`   POST /api/borrow-pas            - Create collateralized loan`);
+    console.log(`   GET  /api/loan/:loanId          - Get loan details`);
+    console.log(`   GET  /api/loans/:userId         - Get all user loans`);
+    console.log(`   GET  /api/lending/config        - Get lending configuration`);
+    console.log(`   POST /api/lending/preview       - Preview loan calculation`);
+    console.log(`\n   🧪 TEST:`);
     console.log(`   POST /api/test/add-balance      - [TEST] Add INR to wallet`);
-    console.log(`\n💡 Example requests:`);
-    console.log(`   # Get PAS balance`);
-    console.log(`   curl http://localhost:${CONFIG.PORT}/api/pas-balance/0xYourAddress`);
-    console.log(`\n   # Buy PAS`);
-    console.log(`   curl -X POST http://localhost:${CONFIG.PORT}/api/buy-pas \\`);
+    console.log(`\n💡 Example: Create a loan`);
+    console.log(`   curl -X POST http://localhost:${CONFIG.PORT}/api/borrow-pas \\`);
     console.log(`     -H "Content-Type: application/json" \\`);
-    console.log(`     -d '{"userId":"test-user-1","pasAmount":0.1,"evmAddress":"0x...","slippageTolerance":1}'`);
+    console.log(`     -d '{"userId":"0x...","borrowAmountInr":500,"evmAddress":"0x...","loanType":"standard","ltvRatio":60}'`);
 });
 
 module.exports = app;

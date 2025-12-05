@@ -2,6 +2,13 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const StellarSdk = require('@stellar/stellar-sdk');
 const { ethers } = require('ethers');
 const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
+
+// Initialize Supabase client
+const supabase = createClient(
+    process.env.VITE_SUPABASE_URL,
+    process.env.VITE_SUPABASE_ANON_KEY
+);
 
 // Extract Stellar SDK components
 const { 
@@ -225,7 +232,33 @@ async function watchStellarEvents(onLockEvent, processedData) {
                         }
                         saveProcessedEvents(processedData);
                         
-                        // Now process the event (async)
+                        // CHECK: Is this a lending loan? If so, skip automatic PAS release
+                        // (The /api/borrow-pas endpoint handles sending the correct PAS amount)
+                        try {
+                            const { data: existingLoan, error: loanCheckError } = await supabase
+                                .from('crypto_purchases')
+                                .select('id, borrowed_pas, status')
+                                .eq('destination_address', evmAddress.toLowerCase())
+                                .not('borrowed_pas', 'is', null)  // Only lending loans have borrowed_pas
+                                .in('status', ['active', 'locked'])
+                                .order('created_at', { ascending: false })
+                                .limit(1)
+                                .single();
+                            
+                            if (existingLoan && existingLoan.borrowed_pas) {
+                                console.log(`\n   ⚠️  LENDING LOAN DETECTED - Skipping automatic PAS release`);
+                                console.log(`   📋 Loan ID: ${existingLoan.id}`);
+                                console.log(`   📋 Borrowed PAS (from loan): ${existingLoan.borrowed_pas}`);
+                                console.log(`   📋 This event was for collateral locking. PAS already sent by /api/borrow-pas.`);
+                                console.log('============================================\n');
+                                continue; // Skip the automatic PAS release
+                            }
+                        } catch (loanCheckErr) {
+                            // No loan found or error - proceed with normal flow (non-lending lock)
+                            console.log(`   📋 No lending loan found - processing as regular stake`);
+                        }
+                        
+                        // Now process the event (async) - only for non-lending locks
                         await onLockEvent({
                             eventId: event.id,
                             evmAddress,

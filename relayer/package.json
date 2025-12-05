@@ -5,8 +5,10 @@
   "scripts": {
     "start": "node src/routes.js",
     "relayer": "node src/index.js",
+    "liquidation-bot": "node src/liquidation-bot.js",
     "dev": "node --watch src/routes.js",
     "dev:relayer": "node --watch src/index.js",
+    "dev:liquidation": "node --watch src/liquidation-bot.js",
     "test:balance": "node test/test-check-balance.js",
     "test:evm-pool": "node test/test-check-evm-pool.js",
     "test:watch": "node test/test-watch-events.js",

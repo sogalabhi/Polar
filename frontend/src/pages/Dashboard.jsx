@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRazorpay } from 'react-razorpay';
 import { motion } from 'framer-motion';
 import InteractiveBackground from '../components/InteractiveBackground';
@@ -7,12 +7,63 @@ import NotificationModal from '../components/NotificationModal';
 import { useWallet } from '../hooks/useWallet';
 import { addFunds, createStake, initiatePayback, executePayback } from '../lib/supabase';
 
+// API Base URL
+const API_BASE = 'http://localhost:3000';
+
+// Loan Types Configuration (will be updated from API)
+const DEFAULT_LOAN_TYPES = [
+  { id: 'short', name: 'Short Term', icon: '⚡', duration: 7, rate: 12, maxLtv: 70, description: 'Quick loan for immediate needs' },
+  { id: 'standard', name: 'Standard', icon: '📊', duration: 30, rate: 8, maxLtv: 75, description: 'Balanced terms for most borrowers', recommended: true },
+  { id: 'long', name: 'Long Term', icon: '🏦', duration: 90, rate: 6, maxLtv: 65, description: 'Extended loan with lower rates' },
+  { id: 'custom', name: 'Custom', icon: '⚙️', duration: null, rate: null, maxLtv: null, description: 'Set your own terms' },
+];
+
+// Health Factor Badge Component
+const HealthFactorBadge = ({ factor }) => {
+  const getColor = () => {
+    if (factor > 1.5) return 'bg-green-500/20 text-green-400 border-green-500/30';
+    if (factor > 1.2) return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+    if (factor > 1.0) return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
+    return 'bg-red-500/20 text-red-400 border-red-500/30';
+  };
+  
+  const getMessage = () => {
+    if (factor > 1.5) return 'Safe';
+    if (factor > 1.2) return 'Moderate';
+    if (factor > 1.0) return 'At Risk';
+    return 'Danger';
+  };
+  
+  return (
+    <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getColor()}`}>
+      {factor.toFixed(2)} {getMessage()}
+    </span>
+  );
+};
+
 const Dashboard = () => {
   const { Razorpay } = useRazorpay();
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [stakeAmount, setStakeAmount] = useState('');
   const [isStaking, setIsStaking] = useState(false);
   const [payingBackStakeId, setPayingBackStakeId] = useState(null);
+  
+  // Loan Creation Wizard State
+  const [showLoanWizard, setShowLoanWizard] = useState(false);
+  const [loanStep, setLoanStep] = useState(1);
+  const [selectedLoanType, setSelectedLoanType] = useState(null);
+  const [borrowAmount, setBorrowAmount] = useState(500);
+  const [ltvRatio, setLtvRatio] = useState(60);
+  const [customDuration, setCustomDuration] = useState(30);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [isCreatingLoan, setIsCreatingLoan] = useState(false);
+  
+  // Lending API State
+  const [lendingConfig, setLendingConfig] = useState(null);
+  const [loanPreview, setLoanPreview] = useState(null);
+  const [activeLoans, setActiveLoans] = useState([]);
+  const [loansLoading, setLoansLoading] = useState(false);
+  const [LOAN_TYPES, setLoanTypes] = useState(DEFAULT_LOAN_TYPES);
   
   // Get wallet data from Supabase via useWallet hook
   const { 
@@ -29,6 +80,113 @@ const Dashboard = () => {
     realPasBalance,
     pasInrRate 
   } = useWallet();
+
+  // Fetch lending configuration from API
+  const fetchLendingConfig = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/lending/config`);
+      const data = await response.json();
+      if (data.success) {
+        setLendingConfig(data.config);
+        // Update loan types with API data
+        if (data.config.loanTypes) {
+          const updatedTypes = data.config.loanTypes.map(lt => ({
+            id: lt.id,
+            name: lt.name,
+            icon: lt.id === 'short' ? '⚡' : lt.id === 'standard' ? '📊' : lt.id === 'long' ? '🏦' : '⚙️',
+            duration: lt.defaultDuration,
+            rate: lt.interestRate,
+            maxLtv: lt.maxLtv,
+            description: lt.description,
+            recommended: lt.id === 'standard'
+          }));
+          // Add custom option
+          updatedTypes.push({ id: 'custom', name: 'Custom', icon: '⚙️', duration: null, rate: null, maxLtv: null, description: 'Set your own terms' });
+          setLoanTypes(updatedTypes);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch lending config:', error);
+    }
+  }, []);
+
+  // Fetch user's active loans from API
+  const fetchActiveLoans = useCallback(async () => {
+    if (!address) return;
+    
+    setLoansLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/loans/${address}`);
+      const data = await response.json();
+      if (data.success && data.loans) {
+        // Transform API response to match UI format
+        const transformedLoans = data.loans.map(loan => ({
+          id: loan.id,
+          collateralXlm: parseFloat(loan.collateral_xlm) || 0,
+          collateralValueInr: parseFloat(loan.collateral_value_inr) || 0,
+          borrowedPas: parseFloat(loan.borrowed_pas) || 0,
+          borrowedValueInr: parseFloat(loan.borrowed_value_inr) || 0,
+          interestAccrued: parseFloat(loan.interest_accrued) || 0,
+          lateFee: parseFloat(loan.late_fee) || 0,
+          healthFactor: parseFloat(loan.health_factor) || 0,
+          ltv: parseFloat(loan.ltv_at_creation) || 0,
+          status: loan.loan_status,
+          loanType: loan.loan_type || 'standard',
+          duration: loan.loan_duration_days || 30,
+          interestRate: parseFloat(loan.interest_rate_apy) || 8,
+          createdAt: new Date(loan.created_at),
+          deadline: loan.repayment_deadline ? new Date(loan.repayment_deadline) : null,
+          liquidationPrice: parseFloat(loan.liquidation_price) || 0,
+          xlmPrice: parseFloat(loan.current_xlm_price) || 0,
+        }));
+        setActiveLoans(transformedLoans);
+      }
+    } catch (error) {
+      console.error('Failed to fetch active loans:', error);
+    } finally {
+      setLoansLoading(false);
+    }
+  }, [address]);
+
+  // Fetch loan preview from API
+  const fetchLoanPreview = useCallback(async (amountInr, ltv, duration) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/lending/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountInr, ltv, durationDays: duration })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setLoanPreview(data.preview);
+      }
+      return data;
+    } catch (error) {
+      console.error('Failed to fetch loan preview:', error);
+      return null;
+    }
+  }, []);
+
+  // Fetch config on mount
+  useEffect(() => {
+    fetchLendingConfig();
+  }, [fetchLendingConfig]);
+
+  // Fetch loans when address changes
+  useEffect(() => {
+    if (address) {
+      fetchActiveLoans();
+    }
+  }, [address, fetchActiveLoans]);
+
+  // Update loan preview when wizard params change
+  useEffect(() => {
+    if (showLoanWizard && loanStep >= 2 && selectedLoanType) {
+      const selectedType = LOAN_TYPES.find(t => t.id === selectedLoanType);
+      const duration = selectedType?.duration || customDuration;
+      fetchLoanPreview(borrowAmount, ltvRatio, duration);
+    }
+  }, [showLoanWizard, loanStep, selectedLoanType, borrowAmount, ltvRatio, customDuration, fetchLoanPreview, LOAN_TYPES]);
 
   const [notifications, setNotifications] = useState([
     { title: 'Welcome to Polar!', message: 'Connect your wallet to get started.', time: 'Just now', type: 'info' },
@@ -200,6 +358,50 @@ const Dashboard = () => {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   };
 
+  // Calculate loan details based on wizard inputs (uses API preview when available)
+  const calculateLoanDetails = () => {
+    // Use API preview if available
+    if (loanPreview) {
+      const selectedType = LOAN_TYPES.find(t => t.id === selectedLoanType);
+      return {
+        duration: loanPreview.durationDays,
+        rate: loanPreview.interestRateApy,
+        maxLtv: selectedType?.maxLtv || (lendingConfig?.maxLtv || 75),
+        collateralNeeded: loanPreview.collateralNeededInr,
+        collateralXlm: loanPreview.collateralXlm,
+        healthFactor: loanPreview.healthFactor,
+        interestEstimate: loanPreview.estimatedInterestInr,
+        liquidationPrice: loanPreview.liquidationPrice,
+        dropPercent: ((loanPreview.xlmPrice - loanPreview.liquidationPrice) / loanPreview.xlmPrice * 100).toFixed(0),
+        borrowPas: loanPreview.borrowPas,
+        xlmPrice: loanPreview.xlmPrice,
+      };
+    }
+    
+    // Fallback calculation if API not available
+    const selectedType = LOAN_TYPES.find(t => t.id === selectedLoanType);
+    const duration = selectedType?.duration || customDuration;
+    const rate = selectedType?.rate || (customDuration <= 7 ? 12 : customDuration <= 14 ? 10 : customDuration <= 30 ? 8 : customDuration <= 60 ? 7 : 6);
+    const maxLtv = selectedType?.maxLtv || 75;
+    const collateralNeeded = borrowAmount / (ltvRatio / 100);
+    const healthFactor = (collateralNeeded * 0.85) / borrowAmount;
+    const interestEstimate = borrowAmount * (rate / 100) * (duration / 365);
+    const xlmPrice = 18.92; // Fallback XLM price
+    const collateralXlm = collateralNeeded / xlmPrice;
+    const liquidationPrice = (borrowAmount / collateralXlm) / 0.85;
+    const dropPercent = ((xlmPrice - liquidationPrice) / xlmPrice * 100).toFixed(0);
+    
+    return { duration, rate, maxLtv, collateralNeeded, collateralXlm, healthFactor, interestEstimate, liquidationPrice, dropPercent, borrowPas: borrowAmount / pasInrRate, xlmPrice };
+  };
+
+  // Get days until/since deadline
+  const getDaysRemaining = (deadline) => {
+    const now = new Date();
+    const diff = deadline - now;
+    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+    return days;
+  };
+
   // Handle payback PAS to get INR for a specific stake
   const handlePayback = async (stake) => {
     if (!isConnected) {
@@ -289,6 +491,94 @@ const Dashboard = () => {
     }
   };
 
+  // Handle loan creation
+  const handleCreateLoan = async () => {
+    if (!isConnected) {
+      alert('Please connect your wallet first!');
+      return;
+    }
+
+    const details = calculateLoanDetails();
+    
+    console.log('\n🏦 ═══════════════════════════════════════════════════════════════════');
+    console.log('   USER ACTION: Create Collateralized Loan');
+    console.log('═══════════════════════════════════════════════════════════════════════');
+    console.log(`   📋 Wallet Address: ${address}`);
+    console.log(`   💰 Borrow Amount: ₹${borrowAmount} (${details.borrowPas?.toFixed(4) || 'N/A'} PAS)`);
+    console.log(`   🔒 Collateral: ${details.collateralXlm?.toFixed(4)} XLM (₹${details.collateralNeeded?.toFixed(2)})`);
+    console.log(`   📊 LTV Ratio: ${ltvRatio}%`);
+    console.log(`   📈 Interest Rate: ${details.rate}% APY`);
+    console.log(`   ⏰ Duration: ${details.duration} days`);
+    console.log(`   💚 Health Factor: ${details.healthFactor?.toFixed(2)}`);
+    console.log('═══════════════════════════════════════════════════════════════════════\n');
+
+    setIsCreatingLoan(true);
+    try {
+      const selectedType = LOAN_TYPES.find(t => t.id === selectedLoanType);
+      
+      const response = await fetch(`${API_BASE}/api/borrow-pas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: address,
+          borrowAmountInr: borrowAmount,
+          evmAddress: address,  // MetaMask address is the EVM address
+          ltvRatio: ltvRatio,
+          customDuration: selectedLoanType === 'custom' ? customDuration : null,
+          loanType: selectedLoanType === 'custom' ? 'custom' : selectedLoanType
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        console.log('\n   ═══════════════════════════════════════════════════════════════');
+        console.log('   ✅ LOAN CREATED SUCCESSFULLY!');
+        console.log('   ═══════════════════════════════════════════════════════════════');
+        console.log(`   📋 Loan ID: ${result.loan?.id || result.purchaseId}`);
+        console.log(`   🔗 Stellar TX: ${result.stellarTxHash || 'Pending'}`);
+        console.log(`   💰 PAS Received: ${result.loan?.borrowedPas || details.borrowPas?.toFixed(4)} PAS`);
+        console.log(`   🔒 XLM Locked: ${result.loan?.collateralXlm || details.collateralXlm?.toFixed(4)} XLM`);
+        console.log('═══════════════════════════════════════════════════════════════════\n');
+
+        setNotifications(prev => [{
+          title: 'Loan Created!',
+          message: `Borrowed ${result.loan?.borrowedPas?.toFixed(4) || details.borrowPas?.toFixed(4)} PAS with ${result.loan?.collateralXlm?.toFixed(2) || details.collateralXlm?.toFixed(2)} XLM collateral`,
+          time: 'Just now',
+          type: 'success'
+        }, ...prev]);
+
+        // Reset wizard and refresh data
+        setShowLoanWizard(false);
+        setLoanStep(1);
+        setSelectedLoanType(null);
+        setAcceptedTerms(false);
+        setBorrowAmount(500);
+        setLtvRatio(60);
+        
+        // Refresh loans and wallet data
+        await Promise.all([fetchActiveLoans(), refresh()]);
+      } else {
+        throw new Error(result.error || 'Failed to create loan');
+      }
+    } catch (error) {
+      console.error('\n   ═══════════════════════════════════════════════════════════════');
+      console.error('   ❌ LOAN CREATION ERROR');
+      console.error('   ═══════════════════════════════════════════════════════════════');
+      console.error(`   Error: ${error.message}`);
+      console.error('═══════════════════════════════════════════════════════════════════\n');
+
+      setNotifications(prev => [{
+        title: 'Loan Creation Failed',
+        message: error.message,
+        time: 'Just now',
+        type: 'error'
+      }, ...prev]);
+    } finally {
+      setIsCreatingLoan(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-black text-white font-mono relative overflow-hidden selection:bg-green-500 selection:text-black">
       <InteractiveBackground />
@@ -369,11 +659,11 @@ const Dashboard = () => {
         {/* Header */}
         <div className="mb-8">
             <h1 className="text-3xl font-bold mb-2">My Assets</h1>
-            <p className="text-gray-400 text-sm">Manage your liquidity and active loans.</p>
+            <p className="text-gray-400 text-sm">Manage your liquidity, loans, and collateral.</p>
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <StatCard 
                 title="Available INR" 
                 value={`₹ ${balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
@@ -382,30 +672,500 @@ const Dashboard = () => {
                 isLoading={isLoading}
             />
             <StatCard 
-                title="Staked INR" 
-                value={`₹ ${totalStakedInr.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+                title="Total Collateral" 
+                value={`₹ ${(activeLoans.reduce((sum, l) => sum + l.collateralValueInr, 0) + totalStakedInr).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>}
-                subValue="Locked"
+                subValue="Locked in Loans"
                 isLoading={isLoading}
             />
              <StatCard 
-                title="PAS Tokens" 
-                value={`${parseFloat(realPasBalance).toFixed(4)} PAS`}
+                title="PAS Borrowed" 
+                value={`${activeLoans.reduce((sum, l) => sum + l.borrowedPas, 0).toFixed(4)} PAS`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" /></svg>}
-                subValue="On Paseo Asset Hub"
+                subValue={`Active Loans: ${activeLoans.filter(l => l.status === 'active' || l.status === 'overdue').length}`}
                 isLoading={isLoading}
             />
             <StatCard 
-                title="Exchange Rate" 
-                value={`1 PAS = ₹${pasInrRate}`}
+                title="Total Debt" 
+                value={`₹ ${activeLoans.reduce((sum, l) => sum + l.borrowedValueInr + l.interestAccrued + l.lateFee, 0).toFixed(2)}`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12 7a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0V8.414l-4.293 4.293a1 1 0 01-1.414 0L8 10.414l-4.293 4.293a1 1 0 01-1.414-1.414l5-5a1 1 0 011.414 0L11 10.586 14.586 7H12z" clipRule="evenodd" /></svg>}
-                subValue="Live"
+                subValue="Principal + Interest"
                 isLoading={isLoading}
             />
         </div>
 
-        {/* Action Section */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* Quick Actions + Create Loan Button */}
+        <div className="flex justify-between items-center mb-8">
+          <div className="flex gap-4">
+            <button 
+              onClick={() => handlePayment(500)} 
+              className="px-6 py-3 bg-green-500/20 border border-green-500/30 text-green-400 font-medium rounded-xl hover:bg-green-500/30 transition-all"
+              disabled={!isConnected}
+            >
+              + Add Funds
+            </button>
+          </div>
+          <button 
+            onClick={() => { setShowLoanWizard(true); setLoanStep(1); setSelectedLoanType(null); setAcceptedTerms(false); }}
+            className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-purple-500/20"
+          >
+            🏦 Create New Loan
+          </button>
+        </div>
+
+        {/* Loan Creation Wizard Modal */}
+        {showLoanWizard && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-gray-900 border border-white/10 rounded-3xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold">🏦 Create New Loan</h2>
+                <button onClick={() => setShowLoanWizard(false)} className="text-gray-400 hover:text-white text-2xl">&times;</button>
+              </div>
+              
+              {/* Progress Steps */}
+              <div className="flex justify-center mb-8">
+                {[1, 2, 3].map(s => (
+                  <div key={s} className="flex items-center">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all ${
+                      loanStep >= s ? 'bg-purple-500 text-white' : 'bg-white/10 text-gray-500'
+                    }`}>
+                      {loanStep > s ? '✓' : s}
+                    </div>
+                    {s < 3 && <div className={`w-16 h-1 mx-2 transition-all ${loanStep > s ? 'bg-purple-500' : 'bg-white/10'}`} />}
+                  </div>
+                ))}
+              </div>
+              
+              {/* Step 1: Select Loan Type */}
+              {loanStep === 1 && (
+                <div>
+                  <h3 className="text-lg font-semibold mb-4 text-center text-gray-300">Select Loan Type</h3>
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    {LOAN_TYPES.map(type => (
+                      <button
+                        key={type.id}
+                        onClick={() => setSelectedLoanType(type.id)}
+                        className={`p-5 rounded-2xl border-2 text-left transition-all relative ${
+                          selectedLoanType === type.id 
+                            ? 'border-purple-500 bg-purple-500/20' 
+                            : 'border-white/10 hover:border-white/30 bg-white/5'
+                        }`}
+                      >
+                        {type.recommended && (
+                          <span className="absolute -top-2 -right-2 text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">
+                            BEST
+                          </span>
+                        )}
+                        <div className="text-2xl mb-2">{type.icon}</div>
+                        <div className="font-bold">{type.name}</div>
+                        {type.duration ? (
+                          <div className="text-xs text-gray-400 mt-1">
+                            {type.duration}d • {type.rate}% APY • {type.maxLtv}% LTV
+                          </div>
+                        ) : (
+                          <div className="text-xs text-gray-400 mt-1">Configure your terms</div>
+                        )}
+                        <div className="text-xs text-gray-500 mt-2">{type.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                  
+                  {/* Custom Duration Selector (if custom selected) */}
+                  {selectedLoanType === 'custom' && (
+                    <div className="bg-white/5 rounded-xl p-4 mb-6">
+                      <label className="block text-sm text-gray-400 mb-3">Loan Duration</label>
+                      <div className="flex gap-2 flex-wrap">
+                        {[7, 14, 30, 60, 90].map(d => (
+                          <button
+                            key={d}
+                            onClick={() => setCustomDuration(d)}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                              customDuration === d 
+                                ? 'bg-purple-500 text-white' 
+                                : 'bg-white/10 text-gray-300 hover:bg-white/20'
+                            }`}
+                          >
+                            {d} days
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">
+                        Rate: {customDuration <= 7 ? 12 : customDuration <= 14 ? 10 : customDuration <= 30 ? 8 : customDuration <= 60 ? 7 : 6}% APY
+                      </p>
+                    </div>
+                  )}
+                  
+                  <button
+                    onClick={() => setLoanStep(2)}
+                    disabled={!selectedLoanType}
+                    className="w-full py-4 bg-purple-500 text-white font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:bg-purple-400 transition-all"
+                  >
+                    Next: Set Amount →
+                  </button>
+                </div>
+              )}
+              
+              {/* Step 2: Amount & LTV */}
+              {loanStep === 2 && (
+                <div>
+                  <div className="text-center mb-6">
+                    <span className="text-sm text-gray-400">Selected: </span>
+                    <span className="text-purple-400 font-medium">
+                      {LOAN_TYPES.find(t => t.id === selectedLoanType)?.icon} {LOAN_TYPES.find(t => t.id === selectedLoanType)?.name}
+                    </span>
+                  </div>
+                  
+                  {/* Borrow Amount */}
+                  <div className="mb-6">
+                    <label className="block text-sm text-gray-400 mb-2">Borrow Amount (₹)</label>
+                    <input
+                      type="range"
+                      min="100"
+                      max="10000"
+                      step="100"
+                      value={borrowAmount}
+                      onChange={(e) => setBorrowAmount(Number(e.target.value))}
+                      className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>₹100</span>
+                      <span className="text-2xl font-bold text-white">₹{borrowAmount.toLocaleString()}</span>
+                      <span>₹10,000</span>
+                    </div>
+                  </div>
+                  
+                  {/* LTV Slider */}
+                  <div className="mb-6">
+                    <label className="block text-sm text-gray-400 mb-2">
+                      LTV Ratio (Loan-to-Value) — <span className="text-purple-400 font-bold">{ltvRatio}%</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="50"
+                      max={calculateLoanDetails().maxLtv}
+                      step="5"
+                      value={ltvRatio}
+                      onChange={(e) => setLtvRatio(Number(e.target.value))}
+                      className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>50% (Safer)</span>
+                      <span>{calculateLoanDetails().maxLtv}% (Max)</span>
+                    </div>
+                  </div>
+                  
+                  {/* Calculated Summary */}
+                  <div className="bg-black/40 rounded-xl p-5 mb-6 border border-white/10">
+                    <h4 className="font-semibold mb-4 text-gray-300">📊 Loan Preview {loanPreview && <span className="text-xs text-green-400 ml-2">✓ Live</span>}</h4>
+                    {(() => {
+                      const details = calculateLoanDetails();
+                      return (
+                        <div className="space-y-3 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">You Borrow</span>
+                            <span className="text-purple-400 font-bold">₹{borrowAmount} ({(details.borrowPas || borrowAmount / pasInrRate).toFixed(4)} PAS)</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Collateral Needed</span>
+                            <span className="text-blue-400 font-bold">₹{details.collateralNeeded?.toFixed(0) || 0} ({details.collateralXlm?.toFixed(4) || 0} XLM)</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-gray-400">Health Factor</span>
+                            <HealthFactorBadge factor={details.healthFactor || 1.5} />
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Liquidation if XLM drops</span>
+                            <span className="text-orange-400">{details.dropPercent || 0}% (to ₹{details.liquidationPrice?.toFixed(2) || 0})</span>
+                          </div>
+                          {details.xlmPrice && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Current XLM Price</span>
+                              <span className="text-white">₹{details.xlmPrice.toFixed(2)}</span>
+                            </div>
+                          )}
+                          <div className="border-t border-white/10 pt-3 mt-3">
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Duration</span>
+                              <span>{details.duration} days</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Interest Rate</span>
+                              <span>{details.rate}% APY</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Est. Interest</span>
+                              <span className="text-yellow-400">₹{details.interestEstimate?.toFixed(2) || 0}</span>
+                            </div>
+                            <div className="flex justify-between font-bold mt-2">
+                              <span>Total to Repay</span>
+                              <span className="text-green-400">₹{(borrowAmount + (details.interestEstimate || 0)).toFixed(2)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  
+                  <div className="flex gap-4">
+                    <button
+                      onClick={() => setLoanStep(1)}
+                      className="flex-1 py-4 bg-white/10 text-white font-medium rounded-xl hover:bg-white/20 transition-all"
+                    >
+                      ← Back
+                    </button>
+                    <button
+                      onClick={() => setLoanStep(3)}
+                      className="flex-1 py-4 bg-purple-500 text-white font-bold rounded-xl hover:bg-purple-400 transition-all"
+                    >
+                      Next: Review →
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {/* Step 3: Review & Confirm */}
+              {loanStep === 3 && (
+                <div>
+                  <h3 className="text-lg font-semibold mb-4 text-center text-gray-300">Review & Confirm</h3>
+                  
+                  {(() => {
+                    const details = calculateLoanDetails();
+                    return (
+                      <>
+                        {/* Summary Cards */}
+                        <div className="grid grid-cols-2 gap-4 mb-6">
+                          <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 text-center">
+                            <p className="text-xs text-gray-400 mb-1">You Provide (Collateral)</p>
+                            <p className="text-xl font-bold text-blue-400">{details.collateralXlm?.toFixed(4) || 0} XLM</p>
+                            <p className="text-sm text-gray-400">≈ ₹{details.collateralNeeded?.toFixed(0) || 0}</p>
+                          </div>
+                          <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-4 text-center">
+                            <p className="text-xs text-gray-400 mb-1">You Receive (Loan)</p>
+                            <p className="text-xl font-bold text-purple-400">{(details.borrowPas || borrowAmount / pasInrRate).toFixed(4)} PAS</p>
+                            <p className="text-sm text-gray-400">≈ ₹{borrowAmount}</p>
+                          </div>
+                        </div>
+                        
+                        {/* Loan Details */}
+                        <div className="bg-white/5 rounded-xl p-5 mb-6 border border-white/10">
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                              <span className="text-gray-500">Loan Type</span>
+                              <p className="font-medium">{LOAN_TYPES.find(t => t.id === selectedLoanType)?.name}</p>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Duration</span>
+                              <p className="font-medium">{details.duration} days</p>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Interest Rate</span>
+                              <p className="font-medium">{details.rate}% APY</p>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">LTV Ratio</span>
+                              <p className="font-medium">{ltvRatio}%</p>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Health Factor</span>
+                              <p className="font-medium text-green-400">{details.healthFactor?.toFixed(2) || 0}</p>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Liquidation Price</span>
+                              <p className="font-medium text-orange-400">₹{details.liquidationPrice?.toFixed(2) || 0}/XLM</p>
+                            </div>
+                          </div>
+                          <div className="border-t border-white/10 mt-4 pt-4">
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Repayment Deadline</span>
+                              <span className="font-medium">{new Date(Date.now() + details.duration * 24 * 60 * 60 * 1000).toLocaleDateString()}</span>
+                            </div>
+                            <div className="flex justify-between mt-2">
+                              <span className="text-gray-400">Total to Repay</span>
+                              <span className="font-bold text-lg text-green-400">₹{(borrowAmount + (details.interestEstimate || 0)).toFixed(2)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Terms Warning */}
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-6">
+                          <p className="text-sm text-red-300 font-medium mb-2">⚠️ Important Terms</p>
+                          <ul className="text-xs text-gray-400 space-y-1">
+                            <li>• Late fee: {lendingConfig?.lateFeePerDay || 2}% per day after deadline</li>
+                            <li>• Force liquidation: {lendingConfig?.maxLateDays || 7} days after deadline</li>
+                            <li>• Liquidation penalty: {lendingConfig?.liquidationPenalty || 10}% of debt</li>
+                            <li>• Liquidation threshold: {lendingConfig?.liquidationThreshold || 85}% LTV</li>
+                          </ul>
+                        </div>
+                        
+                        {/* Accept Terms */}
+                        <label className="flex items-start gap-3 mb-6 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={acceptedTerms}
+                            onChange={(e) => setAcceptedTerms(e.target.checked)}
+                            className="mt-1 w-4 h-4 accent-purple-500"
+                          />
+                          <span className="text-sm text-gray-400">
+                            I understand that my collateral may be liquidated if the health factor drops below 1.0 or if I fail to repay on time.
+                          </span>
+                        </label>
+                      </>
+                    );
+                  })()}
+                  
+                  <div className="flex gap-4">
+                    <button
+                      onClick={() => setLoanStep(2)}
+                      disabled={isCreatingLoan}
+                      className="flex-1 py-4 bg-white/10 text-white font-medium rounded-xl hover:bg-white/20 transition-all disabled:opacity-50"
+                    >
+                      ← Back
+                    </button>
+                    <button
+                      disabled={!acceptedTerms || isCreatingLoan}
+                      onClick={handleCreateLoan}
+                      className="flex-1 py-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-all"
+                    >
+                      {isCreatingLoan ? '🔄 Creating Loan...' : '🔒 Lock XLM & Borrow PAS'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+
+        {/* Active Loans Section */}
+        {(activeLoans.length > 0 || loansLoading) && (
+          <div className="mb-12">
+            <div className="flex items-center gap-3 mb-6">
+              <h2 className="text-2xl font-bold">Active Loans</h2>
+              {loansLoading && <span className="text-sm text-gray-400">Loading...</span>}
+              <button 
+                onClick={fetchActiveLoans} 
+                className="text-sm text-purple-400 hover:text-purple-300 ml-auto"
+                disabled={loansLoading}
+              >
+                🔄 Refresh
+              </button>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {activeLoans.map((loan) => {
+                const daysRemaining = loan.deadline ? getDaysRemaining(loan.deadline) : null;
+                const totalDue = loan.borrowedValueInr + loan.interestAccrued + loan.lateFee;
+                const loanTypeInfo = LOAN_TYPES.find(t => t.id === loan.loanType);
+                
+                return (
+                  <div key={loan.id} className="bg-white/5 border border-white/10 rounded-2xl p-6 hover:border-purple-500/30 transition-all">
+                    {/* Header */}
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="font-bold text-lg">Loan #{String(loan.id).slice(-6)}</h3>
+                        <p className="text-xs text-gray-500">
+                          {loanTypeInfo?.icon || '📄'} {loanTypeInfo?.name || loan.loanType || 'Standard'} • {loan.duration}d
+                        </p>
+                      </div>
+                      <HealthFactorBadge factor={loan.healthFactor || 1} />
+                    </div>
+                    
+                    {/* Collateral & Debt */}
+                    <div className="grid grid-cols-2 gap-3 mb-4">
+                      <div className="bg-blue-500/10 rounded-xl p-3">
+                        <p className="text-xs text-gray-400">Collateral</p>
+                        <p className="font-bold text-blue-400">{loan.collateralXlm?.toFixed(4) || 0} XLM</p>
+                        <p className="text-xs text-gray-500">≈ ₹{loan.collateralValueInr?.toFixed(0) || 0}</p>
+                      </div>
+                      <div className="bg-purple-500/10 rounded-xl p-3">
+                        <p className="text-xs text-gray-400">Borrowed</p>
+                        <p className="font-bold text-purple-400">{loan.borrowedPas?.toFixed(4) || 0} PAS</p>
+                        <p className="text-xs text-gray-500">≈ ₹{loan.borrowedValueInr?.toFixed(0) || 0}</p>
+                      </div>
+                    </div>
+                    
+                    {/* Amount Breakdown */}
+                    <div className="bg-black/30 rounded-xl p-4 mb-4 text-sm">
+                      <div className="flex justify-between mb-1">
+                        <span className="text-gray-400">Principal</span>
+                        <span>₹{loan.borrowedValueInr}</span>
+                      </div>
+                      <div className="flex justify-between mb-1">
+                        <span className="text-gray-400">Interest ({loan.interestRate}% APY)</span>
+                        <span className="text-yellow-400">₹{loan.interestAccrued?.toFixed(2) || 0}</span>
+                      </div>
+                      {loan.lateFee > 0 && (
+                        <div className="flex justify-between mb-1">
+                          <span className="text-red-400">Late Fee</span>
+                          <span className="text-red-400">₹{loan.lateFee?.toFixed(2) || 0}</span>
+                        </div>
+                      )}
+                      <div className="border-t border-white/10 pt-2 mt-2 flex justify-between font-bold">
+                        <span>Total Due</span>
+                        <span className="text-green-400">₹{totalDue?.toFixed(2) || 0}</span>
+                      </div>
+                    </div>
+                    
+                    {/* Deadline Status */}
+                    {loan.deadline && (
+                      <div className={`rounded-xl p-3 mb-4 text-sm ${
+                        daysRemaining < 0 
+                          ? 'bg-red-500/20 border border-red-500/30' 
+                          : daysRemaining <= 3 
+                            ? 'bg-orange-500/20 border border-orange-500/30'
+                            : 'bg-white/5 border border-white/10'
+                      }`}>
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-400">⏰ Deadline</span>
+                          <span className={`font-medium ${daysRemaining < 0 ? 'text-red-400' : daysRemaining <= 3 ? 'text-orange-400' : 'text-white'}`}>
+                            {loan.deadline.toLocaleDateString()}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center mt-1">
+                          <span className="text-gray-400">Status</span>
+                          <span className={`font-bold ${daysRemaining < 0 ? 'text-red-400' : daysRemaining <= 3 ? 'text-orange-400' : 'text-green-400'}`}>
+                            {daysRemaining < 0 
+                              ? `🔴 ${Math.abs(daysRemaining)} days OVERDUE` 
+                              : daysRemaining <= 3 
+                                ? `🟠 ${daysRemaining} days left - ACT NOW`
+                                : `🟢 ${daysRemaining} days remaining`
+                            }
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Liquidation Warning */}
+                    {loan.healthFactor && loan.healthFactor < 1.2 && (
+                      <div className="bg-red-500/20 border border-red-500/30 rounded-xl p-3 mb-4 text-sm">
+                        <p className="text-red-400 font-bold">⚠️ Liquidation Risk</p>
+                        <p className="text-xs text-gray-300">
+                          XLM must stay above ₹{loan.liquidationPrice?.toFixed(2) || 0} to avoid liquidation.
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* Actions */}
+                    <div className="flex gap-3">
+                      <button className="flex-1 py-3 bg-green-500 text-black font-bold rounded-xl hover:bg-green-400 transition-all">
+                        Repay ₹{totalDue.toFixed(0)}
+                      </button>
+                      <button className="flex-1 py-3 bg-blue-500/20 border border-blue-500/30 text-blue-400 font-medium rounded-xl hover:bg-blue-500/30 transition-all">
+                        + Collateral
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Original Action Section - Add Funds & Buy PAS */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
             <div className="p-8 rounded-2xl bg-white/5 border border-white/10 hover:border-green-500/20 transition-all">
                 <h3 className="text-xl font-bold mb-4">Add Funds</h3>
                 <p className="text-gray-400 text-sm mb-6">
@@ -470,21 +1230,21 @@ const Dashboard = () => {
             </div>
         </div>
 
-        {/* Active Stakes Section */}
+        {/* Active Stakes/Purchases History */}
         {stakes.length > 0 && (
-          <div className="mt-12">
-            <h2 className="text-2xl font-bold mb-6">Your Stakes</h2>
-            <div className="overflow-x-auto">
+          <div className="mb-12">
+            <h2 className="text-2xl font-bold mb-6">Purchase History</h2>
+            <div className="overflow-x-auto bg-white/5 rounded-2xl border border-white/10">
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-white/10">
-                    <th className="pb-4 text-gray-400 font-medium">Amount INR</th>
-                    <th className="pb-4 text-gray-400 font-medium">PAS Tokens</th>
-                    <th className="pb-4 text-gray-400 font-medium">Rate</th>
-                    <th className="pb-4 text-gray-400 font-medium">Current Value</th>
-                    <th className="pb-4 text-gray-400 font-medium">Status</th>
-                    <th className="pb-4 text-gray-400 font-medium">Date</th>
-                    <th className="pb-4 text-gray-400 font-medium">Action</th>
+                    <th className="p-4 text-gray-400 font-medium">Amount INR</th>
+                    <th className="p-4 text-gray-400 font-medium">PAS Tokens</th>
+                    <th className="p-4 text-gray-400 font-medium">Rate</th>
+                    <th className="p-4 text-gray-400 font-medium">Current Value</th>
+                    <th className="p-4 text-gray-400 font-medium">Status</th>
+                    <th className="p-4 text-gray-400 font-medium">Date</th>
+                    <th className="p-4 text-gray-400 font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -496,27 +1256,28 @@ const Dashboard = () => {
                     
                     return (
                       <tr key={stake.id} className="border-b border-white/5 hover:bg-white/5">
-                        <td className="py-4">₹{parseFloat(stake.amount_inr).toLocaleString()}</td>
-                        <td className="py-4 text-purple-400">{parseFloat(stake.amount_pas).toFixed(4)} PAS</td>
-                        <td className="py-4 text-gray-400">₹{stake.exchange_rate}</td>
-                        <td className="py-4">
+                        <td className="p-4">₹{parseFloat(stake.amount_inr).toLocaleString()}</td>
+                        <td className="p-4 text-purple-400">{parseFloat(stake.amount_pas).toFixed(4)} PAS</td>
+                        <td className="p-4 text-gray-400">₹{stake.exchange_rate}</td>
+                        <td className="p-4">
                           <span className="text-white">₹{currentValue.toFixed(2)}</span>
                           <span className={`ml-2 text-xs ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                             {pnl >= 0 ? '+' : ''}{pnlPercent}%
                           </span>
                         </td>
-                        <td className="py-4">
+                        <td className="p-4">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             stake.status === 'completed' ? 'bg-green-500/20 text-green-400' :
                             stake.status === 'locked' ? 'bg-blue-500/20 text-blue-400' :
                             stake.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
+                            stake.status === 'paid_back' ? 'bg-purple-500/20 text-purple-400' :
                             'bg-gray-500/20 text-gray-400'
                           }`}>
                             {stake.status}
                           </span>
                         </td>
-                        <td className="py-4 text-gray-400">{new Date(stake.created_at).toLocaleDateString()}</td>
-                        <td className="py-4">
+                        <td className="p-4 text-gray-400">{new Date(stake.created_at).toLocaleDateString()}</td>
+                        <td className="p-4">
                           {(stake.status === 'completed' || stake.status === 'locked') && (
                             <button
                               onClick={() => handlePayback(stake)}
