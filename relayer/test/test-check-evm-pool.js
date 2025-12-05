@@ -11,9 +11,10 @@ const { ethers } = require('ethers');
 
 // Configuration
 const CONFIG = {
-    MOONBASE_RPC_URL: process.env.MOONBASE_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
-    EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6',
+    EVM_RPC_URL: process.env.EVM_RPC_URL || 'https://testnet-passet-hub-eth-rpc.polkadot.io',
+    EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x49e12e876588052A977dB816107B1772B4103E3e',
     EVM_PRIVATE_KEY: process.env.EVM_RELAYER_PRIVATE_KEY,
+    EVM_EXPLORER_URL: 'https://blockscout-passet-hub.parity-testnet.parity.io',
 };
 
 // Pool Contract ABI (minimal)
@@ -27,12 +28,12 @@ async function checkEvmPool() {
     console.log('   TEST: Check EVM Pool Balance');
     console.log('═══════════════════════════════════════════════\n');
     
-    const provider = new ethers.JsonRpcProvider(CONFIG.MOONBASE_RPC_URL);
+    const provider = new ethers.JsonRpcProvider(CONFIG.EVM_RPC_URL);
     const poolContract = new ethers.Contract(CONFIG.EVM_POOL_ADDRESS, POOL_ABI, provider);
     
     console.log(`📋 Configuration:`);
     console.log(`   Pool Contract: ${CONFIG.EVM_POOL_ADDRESS}`);
-    console.log(`   Network: Moonbase Alpha (Chain ID: 1287)`);
+    console.log(`   Network: Paseo Asset Hub (Chain ID: 420420422)`);
     console.log('');
     
     try {
@@ -46,18 +47,18 @@ async function checkEvmPool() {
         console.log('\n✅ ═══════════════════════════════════════════');
         console.log('   EVM POOL STATUS');
         console.log('═══════════════════════════════════════════════');
-        console.log(`   Pool Balance: ${ethers.formatEther(poolBalance)} DEV`);
+        console.log(`   Pool Balance: ${ethers.formatEther(poolBalance)} PAS`);
         console.log(`   Admin: ${admin}`);
         console.log('');
         console.log(`   🔗 View on Explorer:`);
-        console.log(`   https://moonbase.moonscan.io/address/${CONFIG.EVM_POOL_ADDRESS}`);
+        console.log(`   ${CONFIG.EVM_EXPLORER_URL}/address/${CONFIG.EVM_POOL_ADDRESS}`);
         console.log('');
         
         // Check admin wallet balance if private key is set
         if (CONFIG.EVM_PRIVATE_KEY) {
             const wallet = new ethers.Wallet(CONFIG.EVM_PRIVATE_KEY, provider);
             const adminBalance = await provider.getBalance(wallet.address);
-            console.log(`   Admin Wallet Balance: ${ethers.formatEther(adminBalance)} DEV`);
+            console.log(`   Admin Wallet Balance: ${ethers.formatEther(adminBalance)} PAS`);
             console.log('');
         }
         

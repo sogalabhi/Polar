@@ -30,19 +30,21 @@ const CONFIG = {
     VAULT_CONTRACT_ID: process.env.VAULT_CONTRACT_ID || 'CDI75PQ4EA2VBTT7W6EZN2RGJIS4CFDMGT7WJ4L42T4ZSTNEKY42NY2B',
     STELLAR_RELAYER_SECRET: process.env.STELLAR_RELAYER_SECRET || '',
     
-    // Moonbase Alpha EVM Configuration
-    MOONBASE_RPC_URL: process.env.MOONBASE_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
-    EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6',
+    // Paseo Asset Hub EVM Configuration
+    EVM_RPC_URL: process.env.EVM_RPC_URL || 'https://testnet-passet-hub-eth-rpc.polkadot.io',
+    EVM_CHAIN_ID: process.env.EVM_CHAIN_ID || '420420422',
+    EVM_POOL_ADDRESS: process.env.EVM_POOL_ADDRESS || '0x49e12e876588052A977dB816107B1772B4103E3e',
     EVM_RELAYER_PRIVATE_KEY: process.env.EVM_RELAYER_PRIVATE_KEY || '',
+    EVM_EXPLORER_URL: 'https://blockscout-passet-hub.parity-testnet.parity.io',
     
     // Polkadot Configuration (Optional - for ink! pool)
     POLKADOT_RPC_URL: process.env.POLKADOT_RPC_URL || 'wss://paseo.rpc.amforc.com',
     POLKADOT_RELAYER_SEED: process.env.POLKADOT_RELAYER_SEED || '',
     
-    // API Server URL (for notifying when DEV is sent)
+    // API Server URL (for notifying when PAS is sent)
     API_SERVER_URL: process.env.API_SERVER_URL || 'http://localhost:3001',
     
-    // LTV ratio for calculating loan amount (100% = 1.0, 1:1 DEV to XLM)
+    // LTV ratio for calculating loan amount (100% = 1.0, 1:1 PAS to XLM)
     LTV_RATIO: 1.0,
     
     // Polling interval in milliseconds
@@ -85,7 +87,7 @@ function saveProcessedEvents(data) {
 }
 
 // ============================================
-// EVM (MOONBASE) SETUP
+// EVM (PASEO ASSET HUB) SETUP
 // ============================================
 async function setupEvm() {
     if (!CONFIG.EVM_RELAYER_PRIVATE_KEY) {
@@ -93,8 +95,8 @@ async function setupEvm() {
         return null;
     }
     
-    console.log('🔗 Connecting to Moonbase Alpha...');
-    const provider = new ethers.JsonRpcProvider(CONFIG.MOONBASE_RPC_URL);
+    console.log('🔗 Connecting to Paseo Asset Hub...');
+    const provider = new ethers.JsonRpcProvider(CONFIG.EVM_RPC_URL);
     const wallet = new ethers.Wallet(CONFIG.EVM_RELAYER_PRIVATE_KEY, provider);
     const poolContract = new ethers.Contract(CONFIG.EVM_POOL_ADDRESS, EVM_POOL_ABI, wallet);
     
@@ -103,9 +105,9 @@ async function setupEvm() {
     
     console.log(`✅ EVM connected`);
     console.log(`   Relayer: ${wallet.address}`);
-    console.log(`   Relayer Balance: ${ethers.formatEther(balance)} DEV`);
+    console.log(`   Relayer Balance: ${ethers.formatEther(balance)} PAS`);
     console.log(`   Pool Address: ${CONFIG.EVM_POOL_ADDRESS}`);
-    console.log(`   Pool Balance: ${ethers.formatEther(poolBalance)} DEV`);
+    console.log(`   Pool Balance: ${ethers.formatEther(poolBalance)} PAS`);
     
     return { provider, wallet, poolContract };
 }
@@ -254,7 +256,7 @@ async function watchStellarEvents(onLockEvent, processedData) {
 
 // ============================================
 // EVM EVENT LISTENER (FundsReceived → Release on Stellar)
-// Uses polling instead of filters (Moonbase doesn't support long-running filters)
+// Uses polling instead of filters (some chains don't support long-running filters)
 // ============================================
 async function watchEvmEvents(evm, onEvmDeposit, processedData) {
     if (!evm) {
@@ -361,7 +363,7 @@ async function watchEvmEvents(evm, onEvmDeposit, processedData) {
 }
 
 // ============================================
-// RELEASE LIQUIDITY ON EVM (Moonbase)
+// RELEASE LIQUIDITY ON EVM (Paseo Asset Hub)
 // ============================================
 async function releaseOnEvm(evm, eventData) {
     if (!evm) {
@@ -373,7 +375,7 @@ async function releaseOnEvm(evm, eventData) {
     
     const { poolContract, wallet } = evm;
     
-    console.log(`💸 Releasing liquidity on Moonbase...`);
+    console.log(`💸 Releasing liquidity on Paseo Asset Hub...`);
     console.log(`   To: ${eventData.evmAddress}`);
     console.log(`   Amount: ${ethers.formatEther(eventData.loanAmountWei)} DEV`);
     
@@ -475,14 +477,14 @@ async function main() {
     console.log('');
     console.log('🌉 ═══════════════════════════════════════════');
     console.log('   POLAR BRIDGE RELAYER');
-    console.log('   Stellar ↔ Moonbase Alpha Bidirectional Bridge');
+    console.log('   Stellar ↔ Paseo Asset Hub Bidirectional Bridge');
     console.log('═══════════════════════════════════════════════');
     console.log('');
     
     // Load processed events
     const processedData = loadProcessedEvents();
     
-    // Setup EVM (Moonbase Alpha)
+    // Setup EVM (Paseo Asset Hub)
     const evm = await setupEvm();
     
     // Setup Stellar
@@ -515,12 +517,12 @@ async function main() {
     console.log('');
     console.log('🔄 Bridge Flows Active:');
     if (stellar && evm) {
-        console.log('   • Stellar (XLM) → Moonbase (DEV)');
-        console.log('   • Moonbase (DEV) → Stellar (XLM)');
+        console.log('   • Stellar (XLM) → Paseo (PAS)');
+        console.log('   • Paseo (PAS) → Stellar (XLM)');
     } else if (stellar) {
         console.log('   • Stellar (XLM) → (EVM not configured)');
     } else if (evm) {
-        console.log('   • Moonbase (DEV) → (Stellar not configured)');
+        console.log('   • Paseo (PAS) → (Stellar not configured)');
     }
     console.log('');
     console.log('Press Ctrl+C to stop.');

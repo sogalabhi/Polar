@@ -12,7 +12,7 @@
     "test:watch": "node test/test-watch-events.js",
     "test:lock": "node test/test-lock-xlm.js",
     "test:unlock": "node test/test-unlock-xlm.js",
-    "test:release": "node test/test-release-dev.js",
+    "test:release": "node test/test-release-pas.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": ["bridge", "stellar", "moonbeam", "polkadot"],

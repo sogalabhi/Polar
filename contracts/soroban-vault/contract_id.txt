@@ -1,14 +1,14 @@
-✅ Stellar Vault V2 (Native XLM) - COMPLETE!
+Stellar Vault V2 (Native XLM) - COMPLETE!
 Item	Status
-Vault Contract	✅ CDI75PQ4EA2VBTT7W6EZN2RGJIS4CFDMGT7WJ4L42T4ZSTNEKY42NY2B
-Admin	✅ GBXLFRL35YDKSDMJJ2TT7VW25I7C7B76RKFYCB6FMIXWEAMAX3GESCN3
-Functions	✅ lock(), release(), unlock(), get_locked_balance(), get_total_locked()
+Vault Contract	CDI75PQ4EA2VBTT7W6EZN2RGJIS4CFDMGT7WJ4L42T4ZSTNEKY42NY2B
+Admin	GBXLFRL35YDKSDMJJ2TT7VW25I7C7B76RKFYCB6FMIXWEAMAX3GESCN3
+Functions	lock(), release(), unlock(), get_locked_balance(), get_total_locked()
 
-✅ Moonbase Alpha EVM Pool - COMPLETE!
+Paseo Asset Hub EVM Pool - COMPLETE!
 Item	Status
-Pool Contract	✅ 0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6
-Admin	✅ 0xe8cb3F3BA7C674B6fb3C5B3cBe572964a5569D53
-Network	✅ Moonbase Alpha (Chain ID: 1287)
-Verification	✅ https://repo.sourcify.dev/1287/0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6/
-
-# NOTE: Store private keys in .env files only, never commit them!
+Pool Contract 0x49e12e876588052A977dB816107B1772B4103E3e
+Admin	0xe8cb3F3BA7C674B6fb3C5B3cBe572964a5569D53
+Network	Paseo Asset Hub (Chain ID: 420420422)
+RPC URL	https://testnet-passet-hub-eth-rpc.polkadot.io
+Explorer	https://blockscout-passet-hub.parity-testnet.parity.io/address/0x49e12e876588052A977dB816107B1772B4103E3e
+Token	PAS
