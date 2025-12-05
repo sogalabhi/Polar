@@ -27,7 +27,7 @@ const CONFIG = {
     // Stellar Soroban Configuration
     STELLAR_RPC_URL: process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org',
     STELLAR_HORIZON_URL: 'https://horizon-testnet.stellar.org',
-    VAULT_CONTRACT_ID: process.env.VAULT_CONTRACT_ID || 'CC6EIPVGWIIRI73VCJ3VJYLKMQGK7VBKAML5W5GVGZMFLATRYZICJ26A',
+    VAULT_CONTRACT_ID: process.env.VAULT_CONTRACT_ID || 'CDI75PQ4EA2VBTT7W6EZN2RGJIS4CFDMGT7WJ4L42T4ZSTNEKY42NY2B',
     STELLAR_RELAYER_SECRET: process.env.STELLAR_RELAYER_SECRET || '',
     
     // Moonbase Alpha EVM Configuration
@@ -39,8 +39,11 @@ const CONFIG = {
     POLKADOT_RPC_URL: process.env.POLKADOT_RPC_URL || 'wss://paseo.rpc.amforc.com',
     POLKADOT_RELAYER_SEED: process.env.POLKADOT_RELAYER_SEED || '',
     
-    // LTV ratio for calculating loan amount (75% = 0.75)
-    LTV_RATIO: 0.75,
+    // API Server URL (for notifying when DEV is sent)
+    API_SERVER_URL: process.env.API_SERVER_URL || 'http://localhost:3001',
+    
+    // LTV ratio for calculating loan amount (100% = 1.0, 1:1 DEV to XLM)
+    LTV_RATIO: 1.0,
     
     // Polling interval in milliseconds
     POLL_INTERVAL: 5000,
@@ -146,18 +149,16 @@ async function watchStellarEvents(onLockEvent, processedData) {
     
     setInterval(async () => {
         try {
+            // Query ALL contract events (no topic filter - more reliable)
             const response = await server.getEvents({
                 startLedger: startLedger,
                 filters: [
                     {
                         type: "contract",
                         contractIds: [CONFIG.VAULT_CONTRACT_ID],
-                        topics: [
-                            [xdr.ScVal.scvSymbol("lock").toXDR("base64")]
-                        ]
                     },
                 ],
-                limit: 20
+                limit: 50
             });
             
             if (response.events && response.events.length > 0) {
@@ -167,21 +168,42 @@ async function watchStellarEvents(onLockEvent, processedData) {
                         continue;
                     }
                     
-                    console.log('\n🔥 ========== STELLAR LOCK EVENT ==========');
-                    console.log(`   Ledger: ${event.ledger}`);
-                    console.log(`   Event ID: ${event.id}`);
-                    
                     try {
+                        // Parse topics - handle both string and object formats
                         const topics = event.topic.map(t => {
-                            const scVal = xdr.ScVal.fromXDR(t, 'base64');
-                            return scValToNative(scVal);
+                            if (typeof t === 'string') {
+                                const scVal = xdr.ScVal.fromXDR(t, 'base64');
+                                return scValToNative(scVal);
+                            } else if (t.toXDR) {
+                                return scValToNative(t);
+                            }
+                            return t;
                         });
                         
-                        const data = scValToNative(xdr.ScVal.fromXDR(event.value, 'base64'));
+                        // Only process "lock" events
+                        if (topics[0] !== 'lock') {
+                            continue;
+                        }
+                        
+                        console.log('\n🔥 ========== STELLAR LOCK EVENT ==========');
+                        console.log(`   Ledger: ${event.ledger}`);
+                        console.log(`   Event ID: ${event.id}`);
+                        
+                        // Parse data - handle both string and object formats
+                        let data;
+                        if (typeof event.value === 'string') {
+                            const valueScVal = xdr.ScVal.fromXDR(event.value, 'base64');
+                            data = scValToNative(valueScVal);
+                        } else if (event.value.toXDR) {
+                            data = scValToNative(event.value);
+                        } else {
+                            data = event.value;
+                        }
                         
                         // Topic[1] = destination address (EVM address as string)
                         const evmAddress = topics[1];
-                        const [stellarAddress, amount] = data;
+                        const stellarAddress = data[0];
+                        const amount = data[1];
                         
                         console.log(`   EVM Destination: ${evmAddress}`);
                         console.log(`   Stellar Sender: ${stellarAddress}`);
@@ -210,11 +232,11 @@ async function watchStellarEvents(onLockEvent, processedData) {
                             processedData.processedStellarTxIds = processedData.processedStellarTxIds.slice(-1000);
                         }
                         
+                        console.log('============================================\n');
+                        
                     } catch (parseError) {
                         console.error('   Error parsing event:', parseError.message);
                     }
-                    
-                    console.log('============================================\n');
                 }
                 
                 const lastEvent = response.events[response.events.length - 1];
@@ -374,6 +396,26 @@ async function releaseOnEvm(evm, eventData) {
         
         const receipt = await tx.wait();
         console.log(`✅ EVM TX confirmed in block ${receipt.blockNumber}`);
+        
+        // Notify API server that DEV was sent (if server is running)
+        try {
+            const response = await fetch(`${CONFIG.API_SERVER_URL}/api/purchase-completed`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    evmAddress: eventData.evmAddress,
+                    evmTxHash: tx.hash,
+                    stellarEventId: eventData.eventId,
+                    amount: ethers.formatEther(eventData.loanAmountWei)
+                })
+            });
+            if (response.ok) {
+                console.log(`   📡 Notified API server`);
+            }
+        } catch (notifyError) {
+            // Server might not be running, that's OK
+            console.log(`   ⚠️  Could not notify API server: ${notifyError.message}`);
+        }
         
     } catch (e) {
         console.error(`❌ EVM TX failed: ${e.message}`);
