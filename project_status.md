@@ -15,19 +15,27 @@
 
 | Component | Network | Address/ID | Status |
 |-----------|---------|------------|--------|
-| **Soroban Vault** | Stellar Testnet | `CC6EIPVGWIIRI73VCJ3VJYLKMQGK7VBKAML5W5GVGZMFLATRYZICJ26A` | ✅ Deployed |
+| **Soroban Vault V2** | Stellar Testnet | `CDI75PQ4EA2VBTT7W6EZN2RGJIS4CFDMGT7WJ4L42T4ZSTNEKY42NY2B` | ✅ Deployed & Initialized |
 | **EVM Pool** | Moonbase Alpha (1287) | `0x1Df2Cc6129568a62379f232087F20f5Bc4E37cE6` | ✅ Deployed & Verified |
 | **ink! Pool** | Substrate | Compiled, not deployed | ⚠️ Optional |
 
 ### Contract Features Implemented
 
-| Feature | Stellar Vault | EVM Pool | ink! Pool |
-|---------|---------------|----------|-----------|
-| Deposit/Fund | ✅ `deposit()` | ✅ `fund()` | ✅ `fund()` |
-| Release Liquidity | ✅ `unlock()` | ✅ `releaseLiquidity()` | ✅ `release_liquidity()` |
+| Feature | Stellar Vault V2 | EVM Pool | ink! Pool |
+|---------|------------------|----------|-----------|
+| Lock Collateral | ✅ `lock(from, amount, evm_address)` | ✅ `fund()` | ✅ `fund()` |
+| Release Liquidity | ✅ `release(to, amount)` | ✅ `releaseLiquidity()` | ✅ `release_liquidity()` |
+| Unlock Collateral | ✅ `unlock(to, amount)` | - | - |
 | Admin Control | ✅ | ✅ | ✅ |
-| Event Emission | ✅ `lock` event | ✅ `FundsReceived` | ✅ `FundsReceived` |
-| Balance Query | ✅ `get_locked_balance()` | ✅ `getBalance()` | ✅ `get_balance()` |
+| Event Emission | ✅ `lock` event with EVM address | ✅ `FundsReceived` | ✅ `FundsReceived` |
+| Balance Query | ✅ `get_locked_balance()`, `get_total_locked()` | ✅ `getBalance()` | ✅ `get_balance()` |
+
+### Pool Balances (Funded)
+
+| Pool | Balance | Status |
+|------|---------|--------|
+| Stellar Vault | 200 XLM | ✅ Funded |
+| EVM Pool | 1.0 DEV | ✅ Funded |
 
 ### Admin Wallets
 
@@ -37,17 +45,18 @@
 | Moonbase EVM | `0xe8cb3F3BA7C674B6fb3C5B3cBe572964a5569D53` |
 | Polkadot | `5HQk4ZLKzZykLNV4YkoMEzVUG1Hu6QEtaQFvnnfFprUuYtSK` |
 
-### Relayer (Partial)
+### Relayer
 
 | Feature | Status |
 |---------|--------|
 | Stellar Event Listener | ✅ Implemented |
+| EVM Event Listener (Polling) | ✅ Implemented |
 | Event Parsing | ✅ Implemented |
 | Processed Events Tracking | ✅ Implemented |
-| Polkadot/Substrate Release | ✅ Basic Implementation |
-| **EVM Release** | ❌ Not Implemented |
+| EVM Release (Stellar → EVM) | ✅ Implemented |
+| Stellar Release (EVM → Stellar) | ✅ Implemented |
+| Bidirectional Bridge | ✅ Implemented |
 | **Razorpay Webhook** | ❌ Not Implemented |
-| **Bidirectional Bridge** | ❌ Not Implemented |
 
 ---
 
@@ -57,20 +66,19 @@
 
 | Task | Description | Estimated Effort |
 |------|-------------|------------------|
-| 1. Update Relayer for EVM | Add Moonbase Alpha support, listen to EVM events | 2-3 hours |
-| 2. Razorpay Integration | Webhook handler, INR → Crypto conversion | 2-3 hours |
-| 3. Fund Both Pools | Deposit liquidity to Stellar vault & EVM pool | 30 min |
-| 4. Get Stellar Secret Key | Export from Freighter wallet | 10 min |
-| 5. Create .env file | Add all secret keys | 15 min |
+| 1. ~~Update Relayer for EVM~~ | ~~Add Moonbase Alpha support~~ | ✅ Done |
+| 2. ~~Fund Both Pools~~ | ~~Deposit liquidity~~ | ✅ Done |
+| 3. ~~Create .env files~~ | ~~Add all secret keys~~ | ✅ Done |
+| 4. **Test End-to-End Bridge** | Lock XLM → Get DEV | 30 min |
+| 5. Razorpay Integration | Webhook handler, INR → Crypto | 2-3 hours |
 
 ### Medium Priority
 
 | Task | Description | Estimated Effort |
 |------|-------------|------------------|
-| 6. Bidirectional Bridge | EVM → Stellar flow | 2-3 hours |
-| 7. Frontend Dashboard | React UI for deposits/withdrawals | 4-6 hours |
-| 8. Error Handling | Retry logic, crash recovery | 2 hours |
-| 9. Nonce/Replay Protection | Prevent double-spending | 1-2 hours |
+| 6. Frontend Dashboard | React UI for deposits/withdrawals | 4-6 hours |
+| 7. Error Handling | Retry logic, crash recovery | 2 hours |
+| 8. Nonce/Replay Protection | Prevent double-spending | 1-2 hours |
 
 ### Low Priority (Optional)
 
