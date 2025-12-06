@@ -52,6 +52,9 @@ Polar Bridge allows users to:
 └──────────────┘     └──────────────┘
 ```
 
+<img width="2407" height="3167" alt="image" src="https://github.com/user-attachments/assets/8f866aa0-8276-4746-9f18-1b10335616f8" />
+
+
 <img width="2744" height="1558" alt="image" src="https://github.com/user-attachments/assets/25ebbd53-3e02-418e-8da6-45f85bba2704" />
 <img width="2744" height="1558" alt="image" src="https://github.com/user-attachments/assets/c56bf6ad-381b-46a2-9f13-14c17d7ffe71" />
 <img width="2744" height="1558" alt="image" src="https://github.com/user-attachments/assets/245a3650-8f69-450e-bcbf-e26ed2ab17f2" />
