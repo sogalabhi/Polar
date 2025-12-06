@@ -128,11 +128,11 @@ const Dashboard = () => {
           collateralValueInr: parseFloat(loan.collateral_value_inr) || 0,
           borrowedPas: parseFloat(loan.borrowed_pas) || 0,
           borrowedValueInr: parseFloat(loan.borrowed_value_inr) || 0,
-          interestAccrued: parseFloat(loan.interest_accrued) || 0,
-          lateFee: parseFloat(loan.late_fee) || 0,
-          healthFactor: parseFloat(loan.health_factor) || 0,
-          ltv: parseFloat(loan.ltv_at_creation) || 0,
-          status: loan.loan_status,
+          interestAccrued: parseFloat(loan.interestAccrued) || 0,
+          lateFee: parseFloat(loan.lateFee) || 0,
+          healthFactor: parseFloat(loan.healthFactor) || parseFloat(loan.health_factor) || 0,
+          ltv: parseFloat(loan.ltv_ratio) || 0,
+          status: loan.status,
           loanType: loan.loan_type || 'standard',
           duration: loan.loan_duration_days || 30,
           interestRate: parseFloat(loan.interest_rate_apy) || 8,
@@ -884,7 +884,7 @@ const Dashboard = () => {
             />
             <StatCard 
               title="Total Collateral" 
-              value={`₹ ${( (loanSummary.total_collateral_xlm ? (loanSummary.total_collateral_xlm * loanPrices.xlm) : activeLoans.reduce((sum, l) => sum + l.collateralValueInr, 0)) + totalStakedInr).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+              value={`₹ ${activeLoans.reduce((sum, l) => sum + (l.collateralValueInr || 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
                 icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>}
                 subValue="Locked in Loans"
                 isLoading={isLoading}
